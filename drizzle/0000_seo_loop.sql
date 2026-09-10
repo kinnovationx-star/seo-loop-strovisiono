@@ -1,0 +1,16 @@
+CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, site TEXT NOT NULL DEFAULT '', niche TEXT NOT NULL DEFAULT '', primary_info_status TEXT NOT NULL DEFAULT 'missing', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_clients_owner ON clients(owner_id);
+CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, connector TEXT NOT NULL, status TEXT NOT NULL, public_config TEXT NOT NULL DEFAULT '{}', secret_cipher TEXT, checked_at TEXT, updated_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_client_connector ON connections(client_id, connector);
+CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', rights TEXT NOT NULL DEFAULT 'unconfirmed', approved INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_sources_client ON sources(client_id);
+CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', result TEXT, attempts INTEGER NOT NULL DEFAULT 0, lease_until TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_client ON jobs(client_id);
+CREATE TABLE IF NOT EXISTS snapshots (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, connector TEXT NOT NULL, data TEXT NOT NULL, retrieved_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_client_connector ON snapshots(client_id, connector);
+CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'info', message TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_logs_client_created ON logs(client_id, created_at);
+CREATE TABLE IF NOT EXISTS worker_tokens (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, token_hash TEXT NOT NULL, name TEXT NOT NULL, last_seen_at TEXT, created_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_token_hash ON worker_tokens(token_hash);
+CREATE TABLE IF NOT EXISTS oauth_states (state TEXT PRIMARY KEY, client_id TEXT NOT NULL, owner_id TEXT NOT NULL, expires_at TEXT NOT NULL);

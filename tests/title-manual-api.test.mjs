@@ -1,0 +1,7 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+const root=new URL("..",import.meta.url);const source=(p)=>readFile(new URL(p,root),"utf8");
+test("TITLE Manual API has ownership-scoped approve, reject, and queue-backed execute with idempotency",async()=>{const api=await source("app/api/[[...path]]/route.ts");for(const value of ["title-optimization","approve|reject|execute","TITLE_APPROVED","TITLE_REJECTED","TITLE_MANUAL_EXECUTE_QUEUED","execution_status!==\"APPROVED\"","ownedClient(clientId,owner)","title_optimize","idempotent:true"])assert.match(api,new RegExp(value.replace(/[()]/g,"\\$&")));});
+test("TITLE Manual Execute rechecks kill switch, client pause, safety, and article ownership before queueing",async()=>{const api=await source("app/api/[[...path]]/route.ts");for(const value of ["kill_switch_enabled","paused","proposal.safety_status!==\"SAFE\"","TITLE_EXECUTION_BLOCKED","article_versions WHERE id=? AND client_id=? AND article_id=?","manualExecute:true"])assert.match(api,new RegExp(value.replace(/[?]/g,"\\$&")));});
+test("TITLE Manual Execute reuses the title queue and preserves article body by copying draft_json only",async()=>{const api=await source("app/api/[[...path]]/route.ts");assert.match(api,/Boolean\(payload\.manualExecute\)/);assert.match(api,/draft=String\(version\.draft_json\)/);assert.match(api,/pluginSync:"OPTIONAL_PENDING"/);assert.match(api,/title_optimization_history_v2/);});

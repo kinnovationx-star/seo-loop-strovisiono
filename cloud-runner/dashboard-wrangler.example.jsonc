@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "YOUR_CLIENT-seo-loop-dashboard",
+  "main": "./src/full.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "vars": {
+    "CLOUD_RUNNER_PUBLIC_URL": "https://YOUR_CLIENT.example"
+  },
+  "routes": [
+    { "pattern": "YOUR_CLIENT.example/*", "zone_name": "YOUR_CLIENT.example" }
+  ],
+  "assets": { "directory": "../dist/client", "binding": "ASSETS" },
+  "r2_buckets": [
+    { "binding": "BACKUPS", "bucket_name": "YOUR_CLIENT-seo-backups" },
+    { "binding": "FILES", "bucket_name": "YOUR_CLIENT-seo-files" }
+  ],
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "YOUR_CLIENT-seo-loop",
+    "database_id": "REPLACE_WITH_CLIENT_D1_DATABASE_ID",
+    "migrations_dir": "../drizzle"
+  }],
+  "queues": {
+    "producers": [{ "binding": "SEO_JOBS", "queue": "YOUR_CLIENT-seo-jobs" }],
+    "consumers": [{ "queue": "YOUR_CLIENT-seo-jobs", "max_batch_size": 1, "max_retries": 3 }]
+  },
+  "triggers": { "crons": ["*/5 * * * *"] }
+}
