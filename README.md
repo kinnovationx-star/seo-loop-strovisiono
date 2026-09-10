@@ -12,6 +12,8 @@ Client-specific SEO LOOP projects start from this repository. It contains the ap
 npm ci
 npm run build
 npm test
+npm run typecheck:workers
+npm run worker:dry-run
 ```
 
 For local development, create `.dev.vars` from `.dev.vars.example` and enter only the credentials for the client project. Never commit it.
@@ -23,3 +25,7 @@ For local development, create `.dev.vars` from `.dev.vars.example` and enter onl
 3. Create and apply D1 resources/migrations, configure secrets, and deploy only after explicit approval for that client.
 
 The example configurations are deliberately not deploy-ready. This template does not publish to Cloudflare or change a WordPress site.
+
+`worker:dry-run` uses the tracked `cloud-runner/wrangler.typecheck.jsonc` with
+a non-production placeholder D1 ID. It compiles and validates the Worker
+without uploading or contacting a client resource.

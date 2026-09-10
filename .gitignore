@@ -41,6 +41,7 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+/worker-configuration.d.ts
 
 # Client-specific Cloudflare deployment configuration. Start from the tracked
 # *.example.jsonc files and keep real resource IDs and domains local.
