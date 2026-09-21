@@ -1324,8 +1324,8 @@ function scheduleMonthLabel(scheduleStart: string, monthNumber: number) {
 }
 
 // Gutenberg markup is useful for WordPress, but it is not a client-facing
-// editing format.  The monthly plan keeps it as the publishing format and
-// presents the same content as small, understandable section cards instead.
+// editing format. The editor below deliberately treats only H2 as an article
+// section. H3s belong to the H2 immediately above them and stay in its body.
 const decodeArticleText = (value: unknown) => String(value || "")
   .replace(/<!--\s*\/??wp:[\s\S]*?-->/g, "")
   .replace(/<br\s*\/?>/gi, "\n")
@@ -1338,22 +1338,33 @@ const seoSlug = (value: unknown) => String(value || "")
   .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
   .toLowerCase().replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff]+/g, "-")
   .replace(/^-+|-+$/g, "").slice(0, 120) || "article";
+const withoutArticleH1 = (value: unknown) => String(value || "").replace(/<!--\s*wp:heading[^>]*-->\s*<h1[^>]*>[\s\S]*?<\/h1>\s*<!--\s*\/wp:heading\s*-->/gi, "").replace(/<h1[^>]*>[\s\S]*?<\/h1>/gi, "").trim();
 const editorSections = (html: unknown) => {
   const source = String(html || "");
-  const matches = [...source.matchAll(/<h([2-3])[^>]*>([\s\S]*?)<\/h\1>/gi)];
-  if (!matches.length) return [{ id: "section-1", heading: "本文", level: 2, body: decodeArticleText(source) }];
+  const matches = [...source.matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi)];
+  if (!matches.length) {
+    const bodyHtml = withoutArticleH1(source);
+    return [{ id: "section-1", heading: "本文", level: 2, bodyHtml, body: decodeArticleText(bodyHtml), introHtml: "" }];
+  }
+  const introHtml = withoutArticleH1(source.slice(0, matches[0].index || 0));
   return matches.map((match, index) => ({
     id: `section-${index + 1}`,
-    heading: decodeArticleText(match[2]) || `セクション${index + 1}`,
-    level: Number(match[1]) === 3 ? 3 : 2,
+    heading: decodeArticleText(match[1]) || `セクション${index + 1}`,
+    level: 2,
+    // Keep the original markup instead of flattening H3, lists and tables
+    // into plain text. WordPress accepts this HTML and renders it identically.
+    bodyHtml: source.slice((match.index || 0) + match[0].length, matches[index + 1]?.index || source.length).trim(),
     body: decodeArticleText(source.slice((match.index || 0) + match[0].length, matches[index + 1]?.index || source.length)),
+    introHtml: index === 0 ? introHtml : "",
   }));
 };
-const gutenbergSections = (sections: any[]) => sections.map((section) => {
-  const level = Number(section.level) === 3 ? 3 : 2;
+const gutenbergSections = (sections: any[]) => sections.map((section, index) => {
+  const level = 2;
   const heading = escapeArticleHtml(section.heading || "見出し");
-  const paragraphs = String(section.body || "").split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
-  return `<!-- wp:heading {"level":${level}} -->\n<h${level}>${heading}</h${level}>\n<!-- /wp:heading -->\n${paragraphs.map((paragraph) => `<!-- wp:paragraph -->\n<p>${escapeArticleHtml(paragraph).replace(/\n/g, "<br/>")}</p>\n<!-- /wp:paragraph -->`).join("\n")}`;
+  const fallback = String(section.body || "").split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean)
+    .map((paragraph) => `<p>${escapeArticleHtml(paragraph).replace(/\n/g, "<br/>")}</p>`).join("\n");
+  const bodyHtml = String(section.bodyHtml || fallback).trim();
+  return `${index === 0 ? String(section.introHtml || "").trim() : ""}\n<!-- wp:heading {"level":${level}} -->\n<h${level}>${heading}</h${level}>\n<!-- /wp:heading -->\n${bodyHtml}`.trim();
 }).join("\n\n");
 const defaultImagePlan = (role: "featured" | "section", heading = "") => ({
   id: role === "featured" ? "featured" : `section-${seoSlug(heading) || "image"}`,
@@ -1370,16 +1381,19 @@ const normalizedImagePlans = (article: any, sections = editorSections(article?.h
   const supplied = Array.isArray(article?.image_brief) ? article.image_brief : [];
   const featured = supplied.find((image: any) => image?.role === "featured" || /アイキャッチ|featured/i.test(String(image?.placement || ""))) || defaultImagePlan("featured");
   const sectionImages = sections.map((section: any, index: number) => {
-    const found = supplied.find((image: any) => image?.role === "section" && String(image?.heading || "") === section.heading)
+    const found = supplied.find((image: any) => image?.role === "section" && String(image?.section_id || "") === section.id)
+      || supplied.find((image: any) => image?.role === "section" && String(image?.heading || "") === section.heading)
       || supplied.find((image: any) => String(image?.placement || "").includes(section.heading))
       || (index === 0 ? supplied.find((image: any) => image !== featured) : null);
-    return { ...defaultImagePlan("section", section.heading), ...(found || {}), role: "section", heading: section.heading };
+    return { ...defaultImagePlan("section", section.heading), ...(found || {}), id: `section-${index + 1}`, section_id: section.id, role: "section", heading: section.heading, placement: `H2「${section.heading}」の直後` };
   });
   return [{ ...defaultImagePlan("featured"), ...featured, role: "featured", heading: "" }, ...sectionImages];
 };
 const prepareMonthlyArticle = (article: any) => {
   const next = { ...(article || {}) };
-  const sections = Array.isArray(next.editor_sections) && next.editor_sections.length ? next.editor_sections : editorSections(next.html);
+  // Existing saved editor_sections may have been generated by the old H2/H3
+  // splitter. Rebuild from the publishing HTML whenever it exists.
+  const sections = next.html ? editorSections(next.html) : (Array.isArray(next.editor_sections) && next.editor_sections.length ? next.editor_sections : editorSections(""));
   next.editor_sections = sections;
   next.html = next.html || gutenbergSections(sections);
   next.slug = seoSlug(next.slug || next.title);
@@ -1546,6 +1560,7 @@ function MonthlyContentPlan({ client, refresh, embedded = false }: any) {
 function MonthlyPlanItem({ item, open, toggle, save, regenerate, approve, uploadImage }: any) {
   const [article, setArticle] = useState<any>(() => prepareMonthlyArticle(item.article || {}));
   const [imageMessage, setImageMessage] = useState("");
+  const [editingSection, setEditingSection] = useState("");
   useEffect(() => { setArticle(prepareMonthlyArticle(item.article || {})); setImageMessage(""); }, [item.article]);
   const sections = Array.isArray(article.editor_sections) && article.editor_sections.length ? article.editor_sections : editorSections(article.html);
   const images = normalizedImagePlans(article, sections);
@@ -1561,6 +1576,17 @@ function MonthlyPlanItem({ item, open, toggle, save, regenerate, approve, upload
       setImageMessage("手持ち画像を設定しました。保存するとプレビューと公開予約に反映されます。");
     } catch (error: any) { setImageMessage(error.message); }
   };
+  const imageSettings = (image: any, index: number, label: string) => <details className="wp-image-settings">
+    <summary>{label}を設定</summary>
+    <div className="wp-image-settings-body">
+      <label className="inline-choice"><input type="checkbox" checked={image.enabled !== false} onChange={(event) => updateImage(index, "enabled", event.target.checked)} />この画像を使う</label>
+      {image.enabled !== false && <>
+        <div className="image-source-choice"><label className="inline-choice"><input type="radio" checked={image.source !== "manual"} onChange={() => updateImage(index, "source", "ai")} />AIで作る</label><label className="inline-choice"><input type="radio" checked={image.source === "manual"} onChange={() => updateImage(index, "source", "manual")} />手持ち画像を使う</label></div>
+        {image.source === "manual" ? <label>画像をアップロード<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadOwnImage(index, event.target.files?.[0])} /></label> : <><label>AI画像への指示<textarea value={image.prompt || ""} onChange={(event) => updateImage(index, "prompt", event.target.value)} /></label><button type="button" className="secondary" onClick={() => updateImage(index, "regeneration_requested_at", new Date().toISOString())}>AI画像をワンクリックで再生成</button></>}
+        <label>代替テキスト（alt）<input value={image.alt || ""} onChange={(event) => updateImage(index, "alt", event.target.value)} /></label>
+      </>}
+    </div>
+  </details>;
   const status = item.job_status === "failed" ? "生成エラー" : item.job_status === "running" || item.status === "GENERATING" || item.status === "REGENERATING" ? "AI生成中" : item.article ? item.finalConfirmed ? "最終承認済み" : "確認待ち" : "下書き未生成";
   return <article className={`panel monthly-plan-item ${open ? "is-open" : ""}`}>
     <button className="monthly-plan-item-head" onClick={toggle}><span>配信予定：第{item.week_no}週（{item.target_date}）</span><b>{item.planned_title || item.keyword}</b><em className={item.finalConfirmed ? "status connected" : "status"}>{status}</em></button>
@@ -1568,17 +1594,28 @@ function MonthlyPlanItem({ item, open, toggle, save, regenerate, approve, upload
     {["queued", "running"].includes(item.job_status) && <div className="monthly-plan-progress"><span style={{ width: `${Math.max(4, Math.min(100, Number(item.progress?.percent || (item.job_status === "queued" ? 4 : 8))))}%` }} /><small>{item.progress?.detail || (item.job_status === "queued" ? "Cloudflare Queueで生成開始を待っています…" : "AIが下書きを作成しています…")}</small></div>}
     {item.job_error && <p className="error-text">生成エラー: {item.job_error}</p>}
     {open && item.article && <div className="monthly-editor visual-article-editor">
-      <section className="editor-guide"><b>この画面だけで編集できます</b><span>見出し・本文・検索結果用の情報・画像を、分かりやすい単位で直せます。難しいHTMLは触る必要がありません。</span></section>
-      <div className="seo-editor-grid">
-        <label>記事タイトル（H1）<input value={article.title || ""} onChange={(event) => updateArticle({ ...article, title: event.target.value, seo_title: article.seo_title === article.title ? event.target.value : article.seo_title, slug: article.slug || seoSlug(event.target.value) })} /></label>
-        <label>SEOタイトル（titleタグ）<input value={article.seo_title || ""} maxLength={120} onChange={(event) => updateArticle({ ...article, seo_title: event.target.value })} /><small>{String(article.seo_title || "").length}/60文字目安</small></label>
-        <label>URL末尾（slug）<input value={article.slug || ""} onChange={(event) => updateArticle({ ...article, slug: seoSlug(event.target.value) })} /><small>公開URL: /{article.slug || "article"}</small></label>
-        <label>説明文（検索結果用）<textarea value={article.meta_description || ""} maxLength={160} onChange={(event) => updateArticle({ ...article, meta_description: event.target.value })} /><small>{String(article.meta_description || "").length}/120文字目安</small></label>
-      </div>
-      <section className="visual-section-list"><div className="panel-head"><div><h4>本文・見出し</h4><p>カードごとに直せます。画像は各セクションにつき1枚だけ設定できます。</p></div><button className="secondary" onClick={() => updateSections([...sections, { id: `section-${Date.now()}`, heading: "新しい見出し", level: 2, body: "" }])}>セクションを追加</button></div>
-        {sections.map((section: any, index: number) => <section className="visual-section-card" key={section.id}><div className="visual-section-title"><b>セクション {index + 1}</b><button className="text-button" disabled={sections.length === 1} onClick={() => updateSections(sections.filter((_: any, current: number) => current !== index))}>このセクションを削除</button></div><label>見出し<input value={section.heading || ""} onChange={(event) => updateSections(sections.map((current: any, currentIndex: number) => currentIndex === index ? { ...current, heading: event.target.value } : current))} /></label><label>本文<textarea value={section.body || ""} onChange={(event) => updateSections(sections.map((current: any, currentIndex: number) => currentIndex === index ? { ...current, body: event.target.value } : current))} /></label><button className="secondary" onClick={() => regenerate(item, "section", section.heading)}>このセクションをAIで再生成</button></section>)}
-      </section>
-      <section className="image-plan-editor"><div className="panel-head"><div><h4>画像設定とプレビュー</h4><p>アイキャッチ1枚と、各セクション1枚を設定できます。「画像なし」も選べます。AI画像は公開予約の実行時に生成し、手持ち画像はそのままWordPressへ送ります。</p></div></div>{images.map((image: any, index: number) => <div className="visual-image-card" key={`${image.role}-${image.heading || "featured"}`}><div className="image-preview-box">{image.enabled && image.source === "manual" && image.manual_image_url ? <img src={image.manual_image_url} alt={image.alt || "設定した画像"} /> : image.enabled ? <div className="ai-image-placeholder"><b>{image.role === "featured" ? "アイキャッチ画像" : image.heading || "セクション画像"}</b><span>{image.regeneration_requested_at ? "AI画像を再生成予定" : "AI画像を公開時に生成"}</span></div> : <div className="image-disabled-placeholder">画像を設定しない</div>}</div><div className="image-controls"><b>{image.role === "featured" ? "アイキャッチ画像" : `「${image.heading}」の画像`}</b><label className="inline-choice"><input type="checkbox" checked={image.enabled !== false} onChange={(event) => updateImage(index, "enabled", event.target.checked)} />この画像を使う</label>{image.enabled !== false && <><div className="image-source-choice"><label className="inline-choice"><input type="radio" checked={image.source !== "manual"} onChange={() => updateImage(index, "source", "ai")} />AIで作る</label><label className="inline-choice"><input type="radio" checked={image.source === "manual"} onChange={() => updateImage(index, "source", "manual")} />手持ち画像を使う</label></div>{image.source === "manual" ? <label>画像をアップロード<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadOwnImage(index, event.target.files?.[0])} /></label> : <><label>AI画像への指示<textarea value={image.prompt || ""} onChange={(event) => updateImage(index, "prompt", event.target.value)} /></label><button className="secondary" onClick={() => updateImage(index, "regeneration_requested_at", new Date().toISOString())}>AI画像をワンクリックで再生成</button></>}<label>代替テキスト（alt）<input value={image.alt || ""} onChange={(event) => updateImage(index, "alt", event.target.value)} /></label></>}</div></div>)}</section>
+      <section className="editor-guide"><b>WordPressと同じ見た目で、直接編集できます</b><span>H2だけが大きなセクションです。H3・表・箇条書きはH2の中身として表示されます。画像も該当する見出しの中で設定します。</span></section>
+      <article className="wp-article-canvas">
+        <header className="wp-article-header"><p className="wp-article-kicker">記事プレビュー</p><h1>{article.title || item.planned_title || "記事タイトル"}</h1><p className="wp-article-description">{article.meta_description || "検索結果に表示する説明文を設定できます。"}</p>
+          <div className="wp-featured-media">{images[0]?.enabled && images[0]?.source === "manual" && images[0]?.manual_image_url ? <img src={images[0].manual_image_url} alt={images[0].alt || "記事のアイキャッチ画像"} /> : images[0]?.enabled ? <div className="ai-image-placeholder"><b>アイキャッチ画像</b><span>{images[0]?.regeneration_requested_at ? "AI画像を再生成予定" : "公開時にAI画像を生成します"}</span></div> : <div className="image-disabled-placeholder">アイキャッチ画像なし</div>}</div>
+          {imageSettings(images[0], 0, "アイキャッチ画像")}
+        </header>
+        {sections[0]?.introHtml && <div className="wp-article-intro" dangerouslySetInnerHTML={{ __html: sections[0].introHtml }} />}
+        {sections.map((section: any, index: number) => {
+          const imageIndex = images.findIndex((image: any) => image.role === "section" && image.section_id === section.id);
+          const sectionImage = images[imageIndex];
+          const isEditing = editingSection === section.id;
+          return <section className={`wp-editor-section ${isEditing ? "is-editing" : ""}`} key={section.id}>
+            {isEditing ? <input className="wp-section-heading-input" aria-label={`H2見出し ${index + 1}`} value={section.heading || ""} onChange={(event) => updateSections(sections.map((current: any, currentIndex: number) => currentIndex === index ? { ...current, heading: event.target.value } : current))} /> : <h2>{section.heading}</h2>}
+            {isEditing ? <div className="wp-content-editable" contentEditable suppressContentEditableWarning dangerouslySetInnerHTML={{ __html: section.bodyHtml || "<p></p>" }} onBlur={(event) => updateSections(sections.map((current: any, currentIndex: number) => currentIndex === index ? { ...current, bodyHtml: event.currentTarget.innerHTML, body: decodeArticleText(event.currentTarget.innerHTML) } : current))} /> : <div className="wp-rendered-content" dangerouslySetInnerHTML={{ __html: section.bodyHtml || "<p>本文を追加してください。</p>" }} />}
+            <div className="wp-section-actions"><button type="button" className="secondary" onClick={() => setEditingSection(isEditing ? "" : section.id)}>{isEditing ? "編集を終了" : "このH2を編集"}</button><button type="button" className="secondary" onClick={() => regenerate(item, "section", section.heading)}>このH2をAIで再生成</button><button type="button" className="text-button" disabled={sections.length === 1} onClick={() => updateSections(sections.filter((_: any, current: number) => current !== index))}>このH2を削除</button></div>
+            <div className="wp-section-media">{sectionImage?.enabled && sectionImage?.source === "manual" && sectionImage?.manual_image_url ? <img src={sectionImage.manual_image_url} alt={sectionImage.alt || `${section.heading}の画像`} /> : sectionImage?.enabled ? <div className="ai-image-placeholder"><b>{section.heading}の画像</b><span>{sectionImage?.regeneration_requested_at ? "AI画像を再生成予定" : "公開時にAI画像を生成します"}</span></div> : <div className="image-disabled-placeholder">このH2には画像を設定しない</div>}</div>
+            {sectionImage && imageSettings(sectionImage, imageIndex, `「${section.heading}」の画像`)}
+          </section>;
+        })}
+        <button type="button" className="secondary wp-add-section" onClick={() => updateSections([...sections, { id: `section-${sections.length + 1}`, heading: "新しい見出し", level: 2, bodyHtml: "<p>本文を入力してください。</p>", body: "本文を入力してください。" }])}>H2セクションを追加</button>
+      </article>
+      <details className="seo-settings-panel"><summary>SEO設定（タイトルタグ・URL末尾・説明文）</summary><div className="seo-editor-grid"><label>記事タイトル（H1）<input value={article.title || ""} onChange={(event) => updateArticle({ ...article, title: event.target.value, seo_title: article.seo_title === article.title ? event.target.value : article.seo_title, slug: article.slug || seoSlug(event.target.value) })} /></label><label>SEOタイトル（titleタグ）<input value={article.seo_title || ""} maxLength={120} onChange={(event) => updateArticle({ ...article, seo_title: event.target.value })} /><small>{String(article.seo_title || "").length}/60文字目安</small></label><label>URL末尾（slug）<input value={article.slug || ""} onChange={(event) => updateArticle({ ...article, slug: seoSlug(event.target.value) })} /><small>公開URL: /{article.slug || "article"}</small></label><label>説明文（検索結果用）<textarea value={article.meta_description || ""} maxLength={160} onChange={(event) => updateArticle({ ...article, meta_description: event.target.value })} /><small>{String(article.meta_description || "").length}/120文字目安</small></label></div></details>
       {imageMessage && <p className={imageMessage.includes("できません") ? "error-text" : "success-text"}>{imageMessage}</p>}
       <details className="technical-details"><summary>詳細設定：WordPress用HTMLを確認・修正する</summary><textarea className="article-html-editor" value={article.html || ""} onChange={(event) => updateArticle({ ...article, html: event.target.value, editor_sections: editorSections(event.target.value) })} /></details>
       <div className="button-row"><button className="secondary" onClick={() => regenerate(item, "article")}>記事全体をAIで再生成</button><button className="primary" onClick={() => save(item, article)}>変更を保存してプレビューへ反映</button></div>

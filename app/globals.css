@@ -998,6 +998,38 @@ dialog::backdrop {
 .editor-guide span { color:#426a59; line-height:1.55; }
 .seo-editor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; padding:16px; border:1px solid var(--line); border-radius:14px; background:#fff; }
 .seo-editor-grid small { color:var(--muted); font-weight:600; }
+.wp-article-canvas { width:min(100%,860px); margin:0 auto; padding:clamp(24px,5vw,68px); border:1px solid #e1e6ed; border-radius:4px; color:#202124; background:#fff; box-shadow:0 8px 30px #17375012; }
+.wp-article-header { display:grid; gap:16px; padding-bottom:34px; border-bottom:1px solid #e6e9ee; }
+.wp-article-kicker { margin:0; color:#6d7985; font-size:.77rem; font-weight:900; letter-spacing:.12em; text-transform:uppercase; }
+.wp-article-header h1 { margin:0; color:#182431; font-size:clamp(1.75rem,4vw,2.7rem); line-height:1.3; letter-spacing:-.035em; }
+.wp-article-description { margin:0; color:#627284; font-size:1rem; line-height:1.8; }
+.wp-article-intro { margin:32px 0 -2px; color:#283744; font-size:1rem; line-height:1.9; }
+.wp-article-intro > :first-child { margin-top:0; }
+.wp-featured-media,.wp-section-media { overflow:hidden; min-height:220px; border-radius:2px; background:#eef2f6; }
+.wp-featured-media img,.wp-section-media img { display:block; width:100%; min-height:220px; max-height:480px; object-fit:cover; }
+.wp-editor-section { padding:40px 0 0; }
+.wp-editor-section + .wp-editor-section { margin-top:38px; border-top:1px solid #e8ebef; }
+.wp-editor-section h2,.wp-section-heading-input { margin:0 0 18px; color:#172331; font-size:clamp(1.35rem,3vw,1.85rem); line-height:1.45; }
+.wp-section-heading-input { display:block; width:100%; padding:9px 12px; border:1px solid #9eb8d8; border-radius:6px; font:inherit; font-weight:800; background:#f8fbff; }
+.wp-rendered-content,.wp-content-editable { color:#283744; font-size:1rem; line-height:1.9; }
+.wp-rendered-content > :first-child,.wp-content-editable > :first-child { margin-top:0; }
+.wp-rendered-content h3,.wp-content-editable h3 { margin:2em 0 .75em; color:#213b57; font-size:1.2rem; line-height:1.55; }
+.wp-rendered-content p,.wp-content-editable p { margin:0 0 1.35em; }
+.wp-rendered-content ul,.wp-rendered-content ol,.wp-content-editable ul,.wp-content-editable ol { margin:0 0 1.35em; padding-left:1.45em; }
+.wp-rendered-content table,.wp-content-editable table { width:100%; margin:1.5em 0; border-collapse:collapse; font-size:.94rem; }
+.wp-rendered-content td,.wp-rendered-content th,.wp-content-editable td,.wp-content-editable th { padding:10px; border:1px solid #d8e0e8; text-align:left; }
+.wp-content-editable { min-height:130px; padding:15px; border:2px solid #2a67ed; border-radius:7px; outline:0; background:#fbfdff; }
+.wp-section-actions { display:flex; flex-wrap:wrap; gap:8px; margin:20px 0 13px; }
+.wp-section-actions .text-button { margin-left:auto; }
+.wp-section-media { margin-top:13px; min-height:170px; }
+.wp-section-media img { min-height:170px; }
+.wp-image-settings { margin-top:10px; border-top:1px solid #e4e9ee; color:#476177; }
+.wp-image-settings summary { padding:11px 0; cursor:pointer; color:#285fbe; font-weight:800; }
+.wp-image-settings-body { display:grid; gap:10px; padding:4px 0 16px; }
+.wp-image-settings-body textarea { min-height:72px; }
+.wp-add-section { width:100%; margin-top:36px; border-style:dashed; }
+.seo-settings-panel { width:min(100%,860px); margin:0 auto; border:1px solid var(--line); border-radius:10px; background:#f8fbff; }
+.seo-settings-panel summary { padding:14px 16px; cursor:pointer; color:#2b4a65; font-weight:900; }
 .visual-section-list { display:grid; gap:12px; }
 .visual-section-card { display:grid; gap:10px; padding:16px; border:1px solid var(--line); border-left:4px solid #2a67ed; border-radius:12px; background:#fff; }
 .visual-section-card textarea { min-height:160px; }

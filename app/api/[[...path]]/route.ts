@@ -4716,7 +4716,35 @@ export async function POST(request: Request, context: Context) {
         // version independently continues through fact checking and quality
         // review. This avoids an opaque perpetual \"generating\" state in the
         // article-entry UI and does not bypass any existing publication gate.
-        if (creationInputId) await db.prepare("UPDATE article_creation_inputs SET status='ARTICLE_GENERATED',article_id=?,article_version_id=?,updated_at=? WHERE id=? AND client_id=? AND article_job_id=?").bind(generatedForArticleId, versionId, stamp, creationInputId, clientId, job.id).run();
+        if (creationInputId) {
+          await db.prepare("UPDATE article_creation_inputs SET status='ARTICLE_GENERATED',article_id=?,article_version_id=?,updated_at=? WHERE id=? AND client_id=? AND article_job_id=?").bind(generatedForArticleId, versionId, stamp, creationInputId, clientId, job.id).run();
+          // Reference/YouTube/idea articles are real drafts too. Put each one
+          // into the same client-facing content plan automatically so it can
+          // receive the identical visual edit, image and approval flow as a
+          // monthly-planned article. Never add anything to a confirmed plan.
+          if (!monthlyItemId) {
+            const alreadyPlanned = await db.prepare("SELECT id FROM monthly_content_plan_items WHERE client_id=? AND (article_id=? OR article_version_id=?) LIMIT 1").bind(clientId, generatedForArticleId, versionId).first<any>();
+            if (!alreadyPlanned) {
+              let plan = await db.prepare("SELECT * FROM monthly_content_plans WHERE client_id=? AND final_confirmed_at IS NULL ORDER BY plan_month DESC LIMIT 1").bind(clientId).first<any>();
+              if (!plan) {
+                const target = new Date(); target.setUTCMonth(target.getUTCMonth() + 1, 1);
+                const planId = id(), planMonth = target.toISOString().slice(0, 7);
+                await db.prepare("INSERT INTO monthly_content_plans (id,client_id,plan_month,articles_per_week,auto_publish_enabled,status,final_confirmed_at,created_at,updated_at) VALUES (?,?,?,?,0,'DRAFT',NULL,?,?)").bind(planId, clientId, planMonth, 1, stamp, stamp).run();
+                plan = { id: planId, plan_month: planMonth, articles_per_week: 1 };
+              }
+              const count = await db.prepare("SELECT COUNT(*) count FROM monthly_content_plan_items WHERE plan_id=? AND client_id=?").bind(plan.id, clientId).first<any>();
+              const sequenceNo = Number(count?.count || 0) + 1, weekNo = Math.max(1, Math.ceil(sequenceNo / Math.max(1, Number(plan.articles_per_week || 1))));
+              const [year, month] = String(plan.plan_month).split("-").map(Number);
+              const day = Math.min(new Date(Date.UTC(year, month, 0)).getUTCDate(), 1 + (weekNo - 1) * 7);
+              const targetDate = `${plan.plan_month}-${String(day).padStart(2, "0")}`;
+              const source = await db.prepare("SELECT creation_method,primary_keyword_id,primary_keyword_text,topic FROM article_creation_inputs WHERE id=? AND client_id=?").bind(creationInputId, clientId).first<any>();
+              const sourceLabel = String(source?.creation_method || "REFERENCE").toUpperCase() === "YOUTUBE" ? "YouTube" : "参考コンテンツ";
+              const keyword = String(generatedPayload.keyword || source?.primary_keyword_text || result.article?.primary_keyword || result.article?.title || "記事テーマ").slice(0, 240);
+              await db.prepare("INSERT INTO monthly_content_plan_items (id,plan_id,client_id,sequence_no,week_no,target_date,keyword_id,keyword,planned_title,rationale,data_basis,category_id,category_name,article_id,article_version_id,status,final_confirmed,image_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'READY_FOR_REVIEW',0,?,?,?)").bind(id(), plan.id, clientId, sequenceNo, weekNo, targetDate, generatedPayload.keywordId || source?.primary_keyword_id || null, keyword, String(result.article?.title || keyword).slice(0, 500), `${sourceLabel}入力から作成した記事です。コンテンツ計画上で本文・H2ごとの画像・配信予定を確認してから公開できます。`.slice(0, 2000), String(source?.topic || "入力された参考コンテンツと一次情報をもとに作成").slice(0, 2000), Number(result.article?.category_id || 0), String(result.article?.category_name || "未分類").slice(0, 240), generatedForArticleId, versionId, JSON.stringify(result.article?.image_brief || []), stamp, stamp).run();
+              await log(clientId, `${sourceLabel}から作成した記事を翌月コンテンツ計画へ追加`, "info", { creationInputId, articleVersionId: versionId, planId: plan.id });
+            }
+          }
+        }
         const seriesItemId = clipped(generatedPayload.seriesItemId, 120), seriesId = clipped(generatedPayload.seriesId, 120);
         if (seriesItemId && seriesId) await db.prepare("UPDATE article_series_items SET article_id=?,article_version_id=?,status='REVIEWING',updated_at=? WHERE id=? AND series_id=? AND client_id=? AND article_job_id=?").bind(generatedForArticleId, versionId, stamp, seriesItemId, seriesId, clientId, job.id).run();
         await transitionArticleStatus({clientId,owner:anchor.owner_id,articleVersionId:versionId,toStatus:"REVIEWING",reason:"Article draft generation completed.",transitionEvent:`article_generated:${job.id}`});
