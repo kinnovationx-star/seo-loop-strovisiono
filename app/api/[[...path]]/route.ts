@@ -2317,6 +2317,27 @@ export async function GET(request: Request, context: Context) {
       if (!(await ownedClient(clientId, owner))) return json({ error: "クライアントが見つかりません。" }, 404);
       const plan = await db.prepare("SELECT * FROM monthly_content_plans WHERE client_id=? ORDER BY plan_month DESC LIMIT 1").bind(clientId).first<any>();
       if (!plan) return json({ plan: null, items: [], priorities: nextArticlePriorities(await targetKeywordPerformance(clientId)) });
+      // Backfill drafts created before the automatic monthly-plan handoff was
+      // introduced. It is idempotent and only touches a still-editable plan.
+      if (!plan.final_confirmed_at) {
+        const unplanned = (await db.prepare(`SELECT ai.*,v.draft_json
+          FROM article_creation_inputs ai JOIN article_versions v ON v.id=ai.article_version_id AND v.client_id=ai.client_id
+          LEFT JOIN monthly_content_plan_items mi ON mi.client_id=ai.client_id AND (mi.article_id=ai.article_id OR mi.article_version_id=ai.article_version_id)
+          WHERE ai.client_id=? AND ai.status='ARTICLE_GENERATED' AND mi.id IS NULL
+          ORDER BY ai.updated_at ASC LIMIT 30`).bind(clientId).all<any>()).results;
+        if (unplanned.length) {
+          const existingCount = await db.prepare("SELECT COUNT(*) count FROM monthly_content_plan_items WHERE plan_id=? AND client_id=?").bind(plan.id, clientId).first<any>();
+          const [year, month] = String(plan.plan_month).split("-").map(Number);
+          for (let index = 0; index < unplanned.length; index++) {
+            const inputRow = unplanned[index], article = parse(inputRow.draft_json, {}), sequenceNo = Number(existingCount?.count || 0) + index + 1;
+            const weekNo = Math.max(1, Math.ceil(sequenceNo / Math.max(1, Number(plan.articles_per_week || 1))));
+            const day = Math.min(new Date(Date.UTC(year, month, 0)).getUTCDate(), 1 + (weekNo - 1) * 7);
+            const keyword = String(inputRow.primary_keyword_text || article.primary_keyword || article.title || "記事テーマ").slice(0, 240);
+            await db.prepare("INSERT INTO monthly_content_plan_items (id,plan_id,client_id,sequence_no,week_no,target_date,keyword_id,keyword,planned_title,rationale,data_basis,category_id,category_name,article_id,article_version_id,status,final_confirmed,image_plan_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'READY_FOR_REVIEW',0,?,?,?)").bind(id(), plan.id, clientId, sequenceNo, weekNo, `${plan.plan_month}-${String(day).padStart(2, "0")}`, inputRow.primary_keyword_id || null, keyword, String(article.title || keyword).slice(0, 500), "参考コンテンツまたはYouTube入力から作成した記事です。コンテンツ計画で本文・画像・配信予定を確認できます。", String(inputRow.topic || "生成済み記事をコンテンツ計画に反映").slice(0, 2000), Number(article.category_id || 0), String(article.category_name || "未分類").slice(0, 240), inputRow.article_id, inputRow.article_version_id, JSON.stringify(article.image_brief || []), now(), now()).run();
+          }
+          await log(clientId, "既存の入力から作成した記事を翌月コンテンツ計画へ反映", "info", { count: unplanned.length, planId: plan.id });
+        }
+      }
       const items = await db.prepare(`SELECT i.*,k.search_intent,k.priority_score,j.status job_status,j.progress,j.error job_error,v.status article_status,v.draft_json
         FROM monthly_content_plan_items i
         LEFT JOIN seo_keywords k ON k.id=i.keyword_id AND k.client_id=i.client_id
