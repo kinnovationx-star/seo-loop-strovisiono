@@ -710,6 +710,28 @@ dialog::backdrop {
   background: #eef5ff;
   border-left: 4px solid var(--blue);
 }
+.ai-progress-center {
+  position: fixed;
+  z-index: 30;
+  right: 22px;
+  bottom: 22px;
+  width: min(420px, calc(100vw - 34px));
+  display: grid;
+  gap: 10px;
+  padding: 15px;
+  border: 1px solid #b9d3f4;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 18px 46px rgba(23, 71, 143, .23);
+}
+.ai-progress-center-title { display: flex; align-items: center; justify-content: space-between; color: #17478f; }
+.ai-progress-center-title span { padding: 3px 9px; border-radius: 999px; background: #e3efff; font-size: 12px; font-weight: 800; }
+.ai-progress-center-item { display: grid; gap: 7px; padding-top: 10px; border-top: 1px solid #e2ebf5; }
+.ai-progress-center-item > div:first-child { display: grid; gap: 3px; }
+.ai-progress-center-item b { font-size: 14px; color: #1b3550; }
+.ai-progress-center-item span { color: #60788d; font-size: 12px; line-height: 1.45; }
+.ai-progress-center .article-progress-track { height: 8px; }
+@media (max-width: 700px) { .ai-progress-center { right: 12px; bottom: 12px; width: calc(100vw - 24px); } }
 .job-progress.failed {
   background: #fff0f1;
   border-color: #d84655;

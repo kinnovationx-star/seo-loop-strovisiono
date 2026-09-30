@@ -40,6 +40,57 @@ const blank: Data = {
     fileUploadsEnabled: false,
   },
 };
+// Every AI-backed Queue task uses the same wording in the persistent progress
+// tray.  Individual screens can still show their richer task-specific view,
+// but a user should never have to guess whether a click actually started work.
+const aiJobLabel = (type: string) => ({
+  article_input_analyze: "記事の入力・参考情報を分析",
+  article_series_plan: "記事シリーズを企画",
+  article_generate: "記事を生成",
+  content_intelligence_review: "記事を検証・品質確認",
+  aio_observe: "AIOを分析",
+  monthly_report: "月次レポートを生成",
+  ubersuggest_sync: "Ubersuggestの実データを同期",
+  keyword_strategy: "狙うキーワードを選定",
+  primary_info_assist: "一次情報を整理",
+  content_audit: "コンテンツを監査",
+  title_optimize: "タイトル・説明文を最適化",
+  internal_link_analyze: "内部リンクを分析",
+  internal_link_update: "内部リンクを更新",
+  serp_analyze: "検索結果を分析",
+  serp_competitor_analyze: "競合ページを分析",
+  article_mapping_analyze: "既存記事を分類",
+  wordpress_publish: "WordPressへ公開準備",
+  wordpress_rollback: "WordPressの記事を復元",
+  wordpress_seo_plugin_sync: "SEOプラグインを同期",
+  sync_google: "Googleデータを同期",
+  autopilot_execute: "SEO施策を実行",
+}[type] || "AI処理");
+const aiJobTypes = new Set([
+  "article_input_analyze", "article_series_plan", "article_generate",
+  "content_intelligence_review", "aio_observe", "monthly_report",
+  "ubersuggest_sync", "keyword_strategy", "primary_info_assist",
+  "content_audit", "title_optimize", "internal_link_analyze",
+  "internal_link_update", "serp_analyze", "serp_competitor_analyze",
+  "article_mapping_analyze", "wordpress_publish", "wordpress_rollback",
+  "wordpress_seo_plugin_sync", "sync_google", "autopilot_execute",
+]);
+function AiProgressCenter({ jobs }: { jobs: any[] }) {
+  const active = jobs.filter((job) => aiJobTypes.has(String(job.type)) && ["queued", "running"].includes(String(job.status)));
+  if (!active.length) return null;
+  return <aside className="ai-progress-center" aria-live="polite" aria-label="AI処理の進捗">
+    <div className="ai-progress-center-title"><b>AI処理を実行中</b><span>{active.length}件</span></div>
+    {active.slice(0, 4).map((job) => {
+      const task = job.result?.progress || {};
+      const percent = job.status === "queued" ? Math.max(2, Number(task.percent || 2)) : Math.max(5, Math.min(99, Number(task.percent || 5)));
+      return <div className="ai-progress-center-item" key={job.id}>
+        <div><b>{aiJobLabel(job.type)}：{percent}%</b><span>{task.detail || (job.status === "queued" ? "開始を受け付けました。Cloudflare Queueで順番を待っています。" : "AIが処理しています。")}</span></div>
+        <div className="article-progress-track"><span style={{ width: `${percent}%` }} /></div>
+      </div>;
+    })}
+    {active.length > 4 && <small>ほか{active.length - 4}件のAI処理も進行中です。</small>}
+  </aside>;
+}
 const parseStoredJson = (value: unknown, fallback: any) => {
   try {
     return typeof value === "string" ? JSON.parse(value) : (value ?? fallback);
@@ -320,6 +371,15 @@ export function SeoLoopApp() {
   );
   const cloudApiReady = Boolean(data.cloud?.anthropicConfigured);
   const workerOnline = cloudApiReady;
+  const hasActiveAiJobs = jobs.some((job: any) => aiJobTypes.has(String(job.type)) && ["queued", "running"].includes(String(job.status)));
+  // The normal dashboard refresh is intentionally calm.  While an AI task is
+  // active, however, users need feedback immediately rather than waiting for
+  // the next 30-second passive refresh.
+  useEffect(() => {
+    if (!hasActiveAiJobs) return;
+    const timer = window.setInterval(() => { void load(); }, 2500);
+    return () => window.clearInterval(timer);
+  }, [hasActiveAiJobs]);
   const uber =
     snapshots.find((item) => item.connector === "ubersuggest")?.data || {};
   const alerts = useMemo(() => {
@@ -506,10 +566,23 @@ export function SeoLoopApp() {
   };
   const queue = async (type: string, payload: any = {}) => {
     try {
-      await api(`clients/${client.id}/jobs`, "POST", { type, payload });
-      await refresh("処理をキューへ追加しました。");
+      const result = await api(`clients/${client.id}/jobs`, "POST", { type, payload });
+      const job = result.job;
+      // Reflect the accepted Queue job in the UI synchronously.  This closes
+      // the confusing gap between clicking a button and the first API poll.
+      if (job?.id) setData((current) => ({
+        ...current,
+        jobs: [
+          { ...job, client_id: job.client_id || client.id, payload: typeof job.payload === "string" ? JSON.parse(job.payload || "{}") : job.payload || {}, result: job.result || { progress: { percent: 2, stage: "queued", detail: "開始を受け付けました。Cloudflare Queueで順番を待っています。" } } },
+          ...current.jobs.filter((item: any) => item.id !== job.id),
+        ],
+      }));
+      setNotice(`${aiJobLabel(type)}を開始しました。進捗は右下の「AI処理を実行中」で確認できます。`);
+      void load();
+      return result;
     } catch (e: any) {
       setNotice(e.message);
+      return null;
     }
   };
   return (
@@ -542,10 +615,20 @@ export function SeoLoopApp() {
             <div className="eyebrow">SEO OPERATIONS CLOUD</div>
             <h1>{nav.find((x) => x[0] === page)?.[2]}</h1>
           </div>
-          <div className="client-picker" aria-label="固定クライアント">
-            <strong>{client?.name || "InnovationX"}</strong>
-            {client?.site ? <span>{String(client.site).replace(/^https?:\/\//, "").split("/")[0]}</span> : null}
-          </div>
+          <label className="client-picker" aria-label="対象サイトを切り替え">
+            <span>対象サイト</span>
+            <select
+              value={selected}
+              onChange={(event) => setSelected(event.target.value)}
+              disabled={!data.clients.length}
+            >
+              {data.clients.map((item: any) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} — {String(item.site).replace(/^https?:\/\//, "").split("/")[0]}
+                </option>
+              ))}
+            </select>
+          </label>
         </header>
         <div className="content">
           {notice && (
@@ -554,8 +637,9 @@ export function SeoLoopApp() {
               <span>{notice}</span>
             </div>
           )}
+          <AiProgressCenter jobs={jobs} />
           {!client ? (
-            <Onboarding open={() => open("new-client")} />
+            <Onboarding />
           ) : (
             <>
               {alerts.length > 0 && (
@@ -698,6 +782,7 @@ export function SeoLoopApp() {
             client={client}
             map={map}
             refresh={refresh}
+            configureGoogle={() => setModal("google-admin")}
           />
         )}
       </dialog>
@@ -705,14 +790,11 @@ export function SeoLoopApp() {
   );
 }
 
-function Onboarding({ open }: { open: () => void }) {
+function Onboarding() {
   return (
     <section className="panel empty">
-      <h2>最初のクライアントを登録</h2>
-      <p>対象サイト・業種を登録するとSEO運用を開始できます。</p>
-      <button className="primary" onClick={open}>
-        クライアントを追加
-      </button>
+      <h2>対象サイトを準備しています</h2>
+      <p>WebConnectとリバイブレイトの運用先を作成しています。数秒後に再読み込みしてください。</p>
     </section>
   );
 }
@@ -1193,7 +1275,7 @@ function Connections({ map, cloud, open }: any) {
       <div className="heading">
         <div>
           <h2>実連携設定</h2>
-          <p>実際に通信できた連携だけ「接続済み」と表示します。</p>
+          <p>ここからAPI情報を登録できます。サイト別に暗号化してCloudflare上へ保存し、実際に通信できた連携だけ「接続済み」と表示します。</p>
         </div>
       </div>
       <div className="cards connectors">
@@ -3804,7 +3886,7 @@ function LegacyPublishing({
                 Ubersuggest・既存記事・一次情報から、週の新規記事候補を選びます。
               </li>
               <li>
-                新規記事とリライト記事はWordPressの「下書き」まで作成し、公開はしません。
+                新規記事は週ごとの投稿枠に予約され、品質・根拠・WordPress接続・アイキャッチの全条件を通過したものだけ自動公開します。
               </li>
             </ol>
           </div>
@@ -3837,7 +3919,7 @@ function LegacyPublishing({
             週の記事下書き数
             <select
               name="weeklyArticles"
-              defaultValue={automation?.weeklyArticles ?? 3}
+              defaultValue={automation?.weeklyArticles ?? 1}
             >
               {[1, 2, 3, 4, 5, 7].map((count) => (
                 <option key={count} value={count}>
@@ -3846,7 +3928,7 @@ function LegacyPublishing({
               ))}
             </select>
             <small>
-              AIが1週間に作成する新規記事の目安です。すべて下書きです。
+              AIが1週間に作成する新規記事数です。翌月分まで投稿枠を分けて予約します。
             </small>
           </label>
           <label>
@@ -3870,7 +3952,7 @@ function LegacyPublishing({
               ))}
             </select>
             <small>
-              この曜日・時刻にAIが今週分の記事を作り、WordPress下書きへ入稿します。
+              この曜日・時刻を起点に、記事作成と週次投稿を予約します。
             </small>
           </label>
           <label>
@@ -3943,8 +4025,20 @@ function LegacyPublishing({
               公開中の記事は上書きせず、確認用の別下書きとして保存します。
             </small>
           </label>
+          <label className="inline-choice">
+            <input
+              type="checkbox"
+              name="autoPublish"
+              value="yes"
+              defaultChecked={automation?.autoPublish}
+            />
+            品質合格記事を週次で自動公開する
+            <small>
+              95点以上・根拠確認・安全性確認・WordPress接続・GPT Image 2のアイキャッチ設定をすべて通過した記事だけを、投稿枠で公開します。条件未達や外部APIの一時障害では公開せず、連携を解除せずに自動再試行します。
+            </small>
+          </label>
           <p className="field-help">
-            この設定は、画面上部の「AI計画を更新して今月の記事を作成」を押したときに、計画・下書き予約とまとめて反映されます。
+            保存後はCloudflareの定期実行が次の1か月分を準備し、投稿枠ごとに処理します。連携情報を自動で削除・解除することはありません。
           </p>
           {automationMessage && <p>{automationMessage}</p>}
           <div className="wordpress-test-draft">
@@ -7102,15 +7196,15 @@ function GoogleAdminModal({ google, close, submit, notice }: any) {
     <form className="modal" onSubmit={submit}>
       <div className="modal-head">
         <div>
-          <small>OWNER ONLY</small>
-          <h2>Google管理者設定</h2>
+          <small>GOOGLE API SETUP</small>
+          <h2>Google API設定</h2>
         </div>
         <button type="button" className="close" onClick={close}>
           ×
         </button>
       </div>
       <div className="security-note">
-        <b>この画面はSEO Loop所有者専用です</b>
+        <b>Google共通のOAuth設定です</b>
         <p>
           入力値はサーバーで暗号化して保存し、保存後は画面・API・実行ログへ再表示しません。クライアントごとの入力は不要です。
         </p>
@@ -7295,6 +7389,7 @@ function ConnectionModal({
   client,
   map,
   refresh,
+  configureGoogle,
 }: any) {
   const meta = connectors.find((x) => x[0] === connector);
   const isGoogle = ["ga", "gsc", "drive", "youtube"].includes(connector);
@@ -7452,16 +7547,19 @@ function ConnectionModal({
           </p>
           {!google?.configured && (
             <div className="setup-warning">
-              <b>運営者側のGoogle Cloud設定が未完了です</b>
+              <b>Google API設定が未完了です</b>
               <p>
-                あなたのGoogleアカウントや操作の問題ではありません。サーバーにOAuth
-                Client IDとClient
-                Secretを設定すると、このボタンを使えるようになります。
+                下の「Google APIを登録」から、Google Cloudで発行したOAuth Client IDと
+                Client Secretを入力してください。登録後、このままGoogle認証へ進めます。
               </p>
               <small>コールバックURL: {google?.redirectUri || "未設定"}</small>
             </div>
           )}
         </>
+      ) : isUbersuggest ? (
+        <p>
+          「Ubersuggestで認証」を押すと、Ubersuggestのログイン画面へ移動します。承認後、この対象サイト専用の接続として保存されます。
+        </p>
       ) : isLocal ? (
         <p>
           Macワーカーを登録すると、CodexとUbersuggest
@@ -7470,18 +7568,21 @@ function ConnectionModal({
       ) : manual ? (
         <p>noteは公式一般投稿APIがないため、公開用Markdownを生成します。</p>
       ) : (
-        <div className="form-grid">
-          {(fields[connector] || []).map((f: any) => (
-            <label className="wide" key={f[0]}>
-              {f[1]}
-              <input
-                name={f[0]}
-                type={f[2]}
-                required={!(connector === "pagespeed" && f[0] === "apiKey")}
-              />
-            </label>
-          ))}
-        </div>
+        <>
+          <p className="field-help">入力内容はこの対象サイト専用に暗号化してCloudflare上へ保存します。保存後にキーの値は表示されません。</p>
+          <div className="form-grid">
+            {(fields[connector] || []).map((f: any) => (
+              <label className="wide" key={f[0]}>
+                {f[1]}
+                <input
+                  name={f[0]}
+                  type={f[2]}
+                  required={!(connector === "pagespeed" && f[0] === "apiKey")}
+                />
+              </label>
+            ))}
+          </div>
+        </>
       )}
       {notice && <p className="error-text">{notice}</p>}
       <div className="modal-actions">
@@ -7489,18 +7590,15 @@ function ConnectionModal({
           閉じる
         </button>
         {!isLocal && !manual && (
-          <button
-            className="primary"
-            disabled={isGoogle && !google?.configured}
-          >
-            {isGoogle
-              ? google?.configured
-                ? "Googleで認証"
-                : "管理者設定待ち"
-              : isUbersuggest
-                ? "Ubersuggestで認証"
-                : "接続して確認"}
-          </button>
+          isGoogle && !google?.configured ? (
+            <button type="button" className="primary" onClick={configureGoogle}>
+              Google APIを登録
+            </button>
+          ) : (
+            <button className="primary">
+              {isGoogle ? "Googleで認証" : isUbersuggest ? "Ubersuggestで認証" : "接続して確認"}
+            </button>
+          )
         )}
       </div>
     </form>

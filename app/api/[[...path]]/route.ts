@@ -17,11 +17,46 @@ import { evaluateWeeklyAutopilot, freshnessStatus, measureAutopilot } from "../.
 
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path?: string[] }> };
-const INNOVATIONX_CLIENT_ID = "e021f53f-48b6-47f5-8155-4c1072dfdf58";
-const rejectsForeignClientRoute = (route: string) => {
-  const match = route.match(/(?:^|\/)clients\/([^/]+)/);
-  return Boolean(match && match[1] !== INNOVATIONX_CLIENT_ID);
-};
+const DEFAULT_SITES = [
+  {
+    id: "webconnect-site",
+    name: "WebConnect",
+    site: "https://webconnect.site/",
+    niche: "Webサービス",
+  },
+  {
+    id: "reviverate-net",
+    name: "リバイブレイト",
+    site: "https://reviverate.net/",
+    niche: "動画制作・イベント企画・企業PR",
+  },
+] as const;
+
+// This deployment is intentionally limited to the two sites requested for
+// this workspace.  They remain separate clients, so integrations, source
+// material, jobs, and publication settings never cross site boundaries.
+async function ensureDefaultSites(owner: string) {
+  const db = runtime().DB;
+  const stamp = now();
+  await db.batch(
+    DEFAULT_SITES.map((site) =>
+      db
+        .prepare(
+          "INSERT OR IGNORE INTO clients (id,owner_id,name,site,niche,primary_info_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        )
+        .bind(
+          site.id,
+          owner,
+          site.name,
+          site.site,
+          site.niche,
+          "missing",
+          stamp,
+          stamp,
+        ),
+    ),
+  );
+}
 const bootstrapCache = new Map<
   string,
   { expiresAt: number; payload: Record<string, unknown> }
@@ -524,6 +559,26 @@ const nextCalendarWeekday = (startDate: string, weekday: number, weekOffset = 0)
   const offset = (weekday - base.getUTCDay() + 7) % 7 + weekOffset * 7;
   const target = new Date(base.getTime() + offset * 24 * 60 * 60 * 1000);
   return `${target.getUTCFullYear()}-${String(target.getUTCMonth() + 1).padStart(2, "0")}-${String(target.getUTCDate()).padStart(2, "0")}`;
+};
+// Create a rolling set of Japanese publication slots.  A new keyword plan can
+// be prepared in one run, while its articles are generated and published only
+// in their own weekly slot.  This keeps a transient provider error isolated to
+// one article and prevents a month's content from being published at once.
+const rollingPublicationAt = (days: unknown, publishHour: unknown, index: number) => {
+  const selected = Array.from(new Set((Array.isArray(days) ? days : []).map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))).sort((a, b) => a - b);
+  const weekdays = selected.length ? selected : [1];
+  const local = localDateParts(new Date(), "Asia/Tokyo");
+  const today = `${local.year}-${String(local.month).padStart(2, "0")}-${String(local.day).padStart(2, "0")}`;
+  const slot = Math.max(0, index);
+  const weekday = weekdays[slot % weekdays.length];
+  let weekOffset = Math.floor(slot / weekdays.length);
+  let date = nextCalendarWeekday(today, weekday, weekOffset);
+  let scheduled = date ? zonedLocalDateTimeToUtc(date, `${String(Math.min(23, Math.max(0, Number(publishHour ?? 10)))).padStart(2, "0")}:00`, "Asia/Tokyo") : null;
+  if (scheduled && new Date(scheduled).getTime() <= Date.now() + 5 * 60 * 1000) {
+    date = nextCalendarWeekday(today, weekday, weekOffset + 1);
+    scheduled = date ? zonedLocalDateTimeToUtc(date, `${String(Math.min(23, Math.max(0, Number(publishHour ?? 10)))).padStart(2, "0")}:00`, "Asia/Tokyo") : null;
+  }
+  return scheduled;
 };
 
 async function recordArticleScheduleHistory(params: {
@@ -1676,6 +1731,24 @@ function articleImageBriefs(article: any) {
   // is a safety ceiling, not a per-article target; most articles use 2–4.
   return [featured, explanatory, ...supplied.filter((brief: any) => brief !== featured && brief !== explanatory)].slice(0, 6);
 }
+// Recompute the prompt from the final article instead of trusting a stale or
+// generic draft prompt. A section image receives only the matching H2 and its
+// nested H3/body; the featured image receives the article-wide context.
+function imageContextForBrief(article: any, brief: any, index: number) {
+  const html = String(article?.html || "");
+  const needle = text(brief?.heading || String(brief?.placement || "").match(/[「『](.+?)[」』]/)?.[1] || "", 240).toLowerCase();
+  const headings = [...html.matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi)];
+  const found = needle ? headings.findIndex((match) => text(match[1], 240).toLowerCase().includes(needle) || needle.includes(text(match[1], 240).toLowerCase())) : -1;
+  if (found >= 0) {
+    const heading = headings[found], end = headings[found + 1]?.index || html.length;
+    return { label: `H2「${text(heading[1], 240)}」`, body: text(html.slice(heading.index || 0, end), 2200) };
+  }
+  return { label: index === 0 || brief?.role === "featured" ? "記事全体" : text(brief?.placement || "記事本文", 240), body: text(html, index === 0 ? 2600 : 1600) };
+}
+function contextualImagePrompt(article: any, brief: any, index: number) {
+  const context = imageContextForBrief(article, brief, index);
+  return `${text(brief?.prompt, 2200)}\n用途: ${index === 0 || brief?.role === "featured" ? "WordPressのアイキャッチ画像" : `${context.label}を説明する本文画像`}。記事タイトル: ${text(article?.title, 220)}。画像専用の本文文脈: ${context.body}。文脈にある対象・工程・比較・判断場面だけを視覚化し、汎用的な会議・ノートPC・握手・無関係な人物や商品に置き換えない。文字、ロゴ、透かし、根拠のない数値・実績表現、既存ブランドの画面や広告クリエイティブは入れない。読者へのベネフィット: ${text(brief?.benefit, 400)}`;
+}
 async function generateRequiredArticleImages(clientId: string, article: any) {
   const briefs = articleImageBriefs(article);
   const db = runtime().DB;
@@ -1716,7 +1789,7 @@ async function generateRequiredArticleImages(clientId: string, article: any) {
   for (let index = 0; index < briefs.length; index++) {
     const brief = briefs[index] || {};
     try {
-      const imagePrompt = `${text(brief.prompt, 3000)}\n用途: ${index === 0 ? "WordPressのアイキャッチ画像兼、記事冒頭の画像" : `記事本文の「${text(brief.placement, 160)}」を説明する画像`}。記事タイトル: ${text(article.title, 220)}。この記事の文脈だけを表現し、汎用的な会議・ノートPC・人物・無関係な商品画像にはしない。文字、ロゴ、透かし、根拠のない数値・実績表現、既存ブランドの画面や広告クリエイティブは入れない。読者へのベネフィット: ${text(brief.benefit, 400)}`;
+      const imagePrompt = contextualImagePrompt(article, brief, index);
       const generated = await fetch(runnerUrl ? `${runnerUrl}/images` : "https://api.openai.com/v1/images/generations", {
         method: "POST",
         headers: runnerUrl ? { "X-SEO-Loop-Dispatch": runnerToken, "Content-Type": "application/json" } : { Authorization: `Bearer ${imageSecret.apiKey}`, "Content-Type": "application/json" },
@@ -1868,7 +1941,7 @@ async function enqueueScheduledContentJobs(owner: string) {
       jobs.push({
         type: "keyword_strategy",
         payload: {
-          autoCreate: false,
+          autoCreate: true,
           planningWindow: "one_month",
           articleCount: Number(config.weeklyArticles || 3),
           defaultCategoryId: Number(config.defaultCategoryId || 0) || null,
@@ -1918,7 +1991,6 @@ export async function GET(request: Request, context: Context) {
     await ensureSchema();
     const parts = (await context.params).path || [];
     const route = parts.join("/");
-    if (rejectsForeignClientRoute(route)) return json({ error: "InnovationX専用アプリでは別client_idを指定できません。" }, 403);
     if (route === "health") {
       try {
         await runtime().DB.prepare("SELECT 1 AS ok").first();
@@ -1929,6 +2001,7 @@ export async function GET(request: Request, context: Context) {
     }
     if (route === "bootstrap") {
       const owner = await requireOwner(request);
+      await ensureDefaultSites(owner);
       await stopStuckUbersuggestJobs(owner);
       await stopStuckAiJobs(owner);
       const cached = bootstrapCache.get(owner);
@@ -2645,7 +2718,7 @@ export async function POST(request: Request, context: Context) {
     await ensureSchema();
     const parts = (await context.params).path || [];
     const route = parts.join("/");
-    if (rejectsForeignClientRoute(route) || route === "clients") return json({ error: "InnovationX専用アプリではクライアントの追加・切替はできません。" }, 403);
+    if (route === "clients") return json({ error: "このアプリはWebConnectとリバイブレイト専用です。" }, 403);
     if (route === "worker/article-schedules") {
       const registered = await worker(request);
       if (!registered) return json({ error: "ワーカー認証が必要です。" }, 401);
@@ -3734,9 +3807,9 @@ export async function POST(request: Request, context: Context) {
       if (!(await ownedClient(clientId, owner))) return json({ error: "クライアントが見つかりません。" }, 404);
       const existing = await runtime().DB.prepare("SELECT public_config FROM connections WHERE client_id=? AND connector='content_automation'").bind(clientId).first<any>();
       const config = parse(existing?.public_config, {
-        auditHour: 6, strategyDay: 1, strategyHour: 9, weeklyArticles: 3,
+        auditHour: 6, strategyDay: 1, strategyHour: 9, weeklyArticles: 1,
         maxRewrites: 2, autoCreateDrafts: true, scheduleDays: [1], publishHour: 10,
-        categoryRotation: [], defaultCategoryId: 0, safetyMode: "wordpress_draft_only",
+        categoryRotation: [], defaultCategoryId: 0, safetyMode: "quality_gated_auto_publish", autoPublish: false,
       });
       const enabled = !Boolean(config.enabled);
       const stamp = now();
@@ -3761,7 +3834,7 @@ export async function POST(request: Request, context: Context) {
         strategyHour: Math.min(23, Math.max(0, Number(body.strategyHour ?? 9))),
         weeklyArticles: Math.min(
           7,
-          Math.max(1, Number(body.weeklyArticles || 3)),
+          Math.max(1, Number(body.weeklyArticles || 1)),
         ),
         maxRewrites: Math.min(5, Math.max(1, Number(body.maxRewrites || 2))),
         autoCreateDrafts: body.autoCreateDrafts === "yes",
@@ -3769,23 +3842,16 @@ export async function POST(request: Request, context: Context) {
         publishHour: Math.min(23, Math.max(0, Number(body.publishHour ?? 10))),
         categoryRotation,
         defaultCategoryId: Math.max(0, Number(body.defaultCategoryId || 0)),
-        safetyMode: "wordpress_draft_only",
+        safetyMode: "quality_gated_auto_publish",
+        autoPublish: body.autoPublish === "yes",
       };
       const stamp = now();
-      await runtime()
-        .DB.prepare(
+      await runtime().DB.batch([
+        runtime().DB.prepare(
           "INSERT INTO connections (id,client_id,connector,status,public_config,checked_at,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(client_id,connector) DO UPDATE SET status=excluded.status,public_config=excluded.public_config,checked_at=excluded.checked_at,updated_at=excluded.updated_at",
-        )
-        .bind(
-          id(),
-          clientId,
-          "content_automation",
-          config.enabled ? "connected" : "disabled",
-          JSON.stringify(config),
-          stamp,
-          stamp,
-        )
-        .run();
+        ).bind(id(), clientId, "content_automation", config.enabled ? "connected" : "disabled", JSON.stringify(config), stamp, stamp),
+        runtime().DB.prepare("INSERT INTO client_publish_settings (client_id,auto_publish_enabled,auto_create_category,tag_limit,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET auto_publish_enabled=excluded.auto_publish_enabled,updated_at=excluded.updated_at").bind(clientId, config.autoPublish ? 1 : 0, 0, 5, stamp),
+      ]);
       await log(clientId, "記事の自動選定・点検設定を更新");
       return json({ ok: true, config });
     }
@@ -4909,10 +4975,7 @@ export async function POST(request: Request, context: Context) {
         Array.isArray(result?.recommended_keywords)
       ) {
         const payload = parse(job.payload, {});
-        const count = Math.min(
-          7,
-          Math.max(1, Number(payload.articleCount || 3)),
-        );
+        const count = Math.min(7, Math.max(1, Number(payload.articleCount || 1) * 4));
         const client = await db
           .prepare("SELECT primary_info_status FROM clients WHERE id=?")
           .bind(clientId)
@@ -5012,7 +5075,7 @@ export async function POST(request: Request, context: Context) {
             targetCharacters: Number(payload.targetCharacters || 10000),
             categoryId: Number((payload.categoryRotation || [])[candidateIndex % Math.max(1, (payload.categoryRotation || []).length)] || payload.defaultCategoryId || keyword.category_id || 0) || null,
             categoryName: (payload.categoryRotation || []).length || payload.defaultCategoryId ? "" : keyword.category_name || "",
-            scheduledFor: keyword.scheduledFor || null,
+            scheduledFor: keyword.scheduledFor || rollingPublicationAt(payload.scheduleDays, payload.publishHour, created),
           };
           await db
             .prepare(
@@ -5358,7 +5421,6 @@ export async function PATCH(request: Request, context: Context) {
     await ensureSchema();
     const owner = await requireOwner(request);
     const route = ((await context.params).path || []).join("/");
-    if (rejectsForeignClientRoute(route)) return json({ error: "InnovationX専用アプリでは別client_idを指定できません。" }, 403);
     const seoEntity = route.match(/^clients\/([^/]+)\/(topics|clusters|keywords|briefs)\/([^/]+)$/);
     if (seoEntity) {
       const [, clientId, kind, itemId] = seoEntity;
@@ -5466,7 +5528,7 @@ export async function DELETE(request: Request, context: Context) {
     await ensureSchema();
     const owner = await requireOwner(request);
     const parts = (await context.params).path || [];
-    if (rejectsForeignClientRoute(parts.join("/")) || parts.join("/") === `clients/${INNOVATIONX_CLIENT_ID}`) return json({ error: "InnovationX専用アプリではクライアントを削除できません。" }, 403);
+    if (DEFAULT_SITES.some((site) => parts.join("/") === `clients/${site.id}`)) return json({ error: "初期設定の対象サイトは削除できません。" }, 403);
     const seoEntity = parts.join("/").match(/^clients\/([^/]+)\/(topics|clusters|keywords|briefs)\/([^/]+)$/);
     if (seoEntity) {
       const [, clientId, kind, itemId] = seoEntity;

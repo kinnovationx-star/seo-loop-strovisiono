@@ -16,7 +16,7 @@ test("keyword strategy keeps model input bounded and excludes WordPress bodies",
   assert.match(worker, /primary\.length > 0 && !\[\.\.\.terms\]\.some/);
   assert.match(worker, /volume.*search_volume/);
   assert.match(worker, /strategy_source: "UBERSUGGEST_FALLBACK"/);
-  assert.match(worker, /Promise\.race\(\[model, wait\(20 \* 1000\)\.then\(\(\) => null\)\]\)/);
+  assert.match(worker, /Promise\.race\(\[model, wait\(45 \* 1000\)\.then\(\(\) => null\)\]\)/);
 });
 
 test("Anthropic transient 524 handling is finite and each retry receives a new timeout controller", async () => {
