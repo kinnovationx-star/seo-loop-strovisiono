@@ -352,6 +352,12 @@ export function SeoLoopApp({ initialPage = "dashboard" }: { initialPage?: string
     }, 30000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    const restorePageFromUrl = () =>
+      setPage(location.pathname === "/monthly-content-plan" ? "monthly-plan" : "dashboard");
+    window.addEventListener("popstate", restorePageFromUrl);
+    return () => window.removeEventListener("popstate", restorePageFromUrl);
+  }, []);
   const client =
     data.clients.find((item) => item.id === selected) || data.clients[0];
   const connections = data.connections.filter(
@@ -586,12 +592,8 @@ export function SeoLoopApp({ initialPage = "dashboard" }: { initialPage?: string
     }
   };
   const navigate = (nextPage: string) => {
-    // The content plan has its own shareable URL.  Keep every other screen
-    // as the existing fast in-app view.
-    if (nextPage === "monthly-plan" && location.pathname !== "/monthly-content-plan") {
-      location.assign("/monthly-content-plan");
-      return;
-    }
+    const nextPath = nextPage === "monthly-plan" ? "/monthly-content-plan" : "/";
+    if (location.pathname !== nextPath) history.pushState({}, "", nextPath);
     setPage(nextPage);
   };
   return (
@@ -670,7 +672,7 @@ export function SeoLoopApp({ initialPage = "dashboard" }: { initialPage?: string
                   queue={queue}
                   worker={worker}
                   workerOnline={workerOnline}
-                  goConnections={() => setPage("connections")}
+                  goConnections={() => navigate("connections")}
                 />
               )}{" "}
               {page === "connections" && (
@@ -692,7 +694,7 @@ export function SeoLoopApp({ initialPage = "dashboard" }: { initialPage?: string
                 />
               )}{" "}
               {page === "article-preview" && (
-                <ArticlePreview client={client} onNavigate={setPage} />
+                <ArticlePreview client={client} onNavigate={navigate} />
               )}{" "}
               {page === "monthly-plan" && (
                 <MonthlyContentPlan client={client} refresh={refresh} />
@@ -709,8 +711,8 @@ export function SeoLoopApp({ initialPage = "dashboard" }: { initialPage?: string
                   }
                   wordpressConnected={map.wordpress?.status === "connected"}
                   workerOnline={workerOnline}
-                  goPlan={() => setPage("publishing")}
-                  goConnections={() => setPage("connections")}
+                  goPlan={() => navigate("publishing")}
+                  goConnections={() => navigate("connections")}
                 />
               )}{" "}
               {page === "aio" && (

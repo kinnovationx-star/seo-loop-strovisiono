@@ -17,7 +17,8 @@ test("monthly content plan has a dedicated shareable lower-page route", async ()
     readFile(path.join(root, "app", "seo-loop-app.tsx"), "utf8"),
     readFile(path.join(root, "app", "monthly-content-plan", "page.tsx"), "utf8"),
   ]);
-  assert.match(ui, /location\.assign\("\/monthly-content-plan"\)/);
+  assert.match(ui, /nextPage === "monthly-plan" \? "\/monthly-content-plan" : "\/"/);
+  assert.match(ui, /history\.pushState\(\{\}, "", nextPath\)/);
   assert.match(ui, /function SeoLoopApp\(\{ initialPage = "dashboard" \}/);
   assert.match(page, /<SeoLoopApp initialPage="monthly-plan" \/>/);
 });
