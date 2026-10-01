@@ -42,7 +42,7 @@ test("primary interview retains completed answers and advances with application-
   assert.match(worker, /context\.primaryInterviewHistory/);
   assert.match(worker, /const guided = primaryInfoFallback\(job\)/);
   assert.match(worker, /next_question_key: guided\.next_question_key/);
-  assert.match(worker, /follow_up_questions: modelQuestion/);
+  assert.match(worker, /follow_up_questions: guided\.next_question_key && modelQuestion/);
 });
 
 test("primary-information chat is the default, asks client-specific follow-ups, and retains update history", async () => {
@@ -56,7 +56,7 @@ test("primary-information chat is the default, asks client-specific follow-ups, 
   assert.match(ui, /Excel \/ PDFを使ってまとめて追加する（任意）/);
   assert.match(worker, /これは固定アンケートではありません/);
   assert.match(worker, /回答済みのことを聞き直さず/);
-  assert.match(worker, /follow_up_questions: modelQuestion/);
+  assert.match(worker, /follow_up_questions: guided\.next_question_key && modelQuestion/);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS primary_info_versions/);
 });
 
@@ -78,6 +78,8 @@ test("primary-information interview establishes the company and article goal bef
   assert.match(worker, /専門用語や曖昧な営業表現を避けた自然で丁寧な日本語/);
   assert.match(ui, /const modelQuestionMatchesActiveStep/);
   assert.match(ui, /const activeQuestionKey/);
+  assert.match(ui, /const requestedInterviewStep/);
+  assert.match(ui, /String\(key \|\| ""\)\.replace\(\/\^followup_\//);
   assert.match(ui, /記事の土台/);
 });
 

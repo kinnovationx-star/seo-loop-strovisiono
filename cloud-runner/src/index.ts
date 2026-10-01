@@ -1193,7 +1193,10 @@ function primaryInfoFallback(job: Job) {
     interview_progress: { completed: completed.map((step) => step.key), total: PRIMARY_INTERVIEW_STEPS.length },
     article_readiness: { completed: readyChecks, total: PRIMARY_ARTICLE_CHECKS.length, checks: readiness },
     next_question_key: followUp ? `followup_${followUp.key}` : next?.key || null,
-    follow_up_questions: next ? [followUp ? primaryClarifyingQuestion(followUp, answers[followUp.key] || "") : next.question] : ["ここまでの内容で、記事に載せてよい固有名詞・数字・事例を確認してください。追加できる事実があれば、そのまま送ってください。"],
+    // Once all required evidence areas have been addressed, do not emit a
+    // generic closing question.  The UI can then offer the explicit
+    // article-information confirmation instead of restarting the interview.
+    follow_up_questions: next ? [followUp ? primaryClarifyingQuestion(followUp, answers[followUp.key] || "") : next.question] : [],
     unverified_claims: [],
     ready_for_use: false,
     provider_status: "FALLBACK_GUIDED_INTERVIEW",
@@ -1237,11 +1240,17 @@ async function primaryPdfAttachments(env: Env, job: Job) {
 }
 async function primaryInfoAssistant(env: Env, job: Job, instruction: string, context: unknown) {
   const guided = primaryInfoFallback(job);
+  const interviewDecision = {
+    next_question_key: guided.next_question_key,
+    article_readiness: guided.article_readiness,
+    quality_score: guided.quality_score,
+    quality_summary: guided.quality_summary,
+  };
   try {
     const documents = await primaryPdfAttachments(env, job);
     const out = await claude(
       env,
-      `${instruction} 添付PDFがある場合は、PDFに書かれた「項目」と「クライアントの内容」を最優先の根拠として使います。PDFの記載を単に転載せず、内容を落とさず自然な日本語の一次情報へ文章化してください。PDFにない数値・実績・お客様の声は創作せず、未確認はunverified_claimsへ分けてください。これは固定アンケートではありません。最初に会社の実態、次に事業内容、次に今回の記事の目的を確認してから、回答内容に応じてサービス・顧客・課題・実績を奥へ深掘りします。クライアントの業種、これまでの回答、既存一次情報を読み、回答済みのことを聞き直さず、次の質問を1問だけ作ってください。短い・抽象的な回答には、同じ論点の具体例、対象、判断、期間、条件、本人の言葉のいずれか一つだけを追加で聞いてください。「分からない」「非公開」の回答を繰り返し聞かず、別の一次情報へ進んでください。質問は、専門用語や曖昧な営業表現を避けた自然で丁寧な日本語にし、なぜ今それが必要かと何を答えればよいかが分かる補足を含めてください。「他社と比べて」などの比較質問は、会社・事業・記事目的を確認した後にだけ行います。事例なら対象・期間・施策・前後変化・公開可否、人物記事なら本人の経験・発言確認・肩書き、慎重な業種なら条件・根拠・確認者を優先します。更新回答なら何が変わったかと有効時点を確認してください。follow_up_questionsは不足がある限り最も重要な1問だけを返してください。next_question_keyは company/business/content_goal/service/customer/problem/difference/process/proof/evidence/update または followup_ を先頭につけた同じキーにします。quality_breakdownは項目ごとの配列にし、80点未満では不足項目を埋める質問を優先し、80点以上でも公開可否が未確認ならready_for_useをfalseにしてください。ジョブ情報:${compact({ payload: job.payload, context }, 24000)}`,
+      `${instruction} 添付PDFがある場合は、PDFに書かれた「項目」と「クライアントの内容」を最優先の根拠として使います。PDFの記載を単に転載せず、内容を落とさず自然な日本語の一次情報へ文章化してください。PDFにない数値・実績・お客様の声は創作せず、未確認はunverified_claimsへ分けてください。これは固定アンケートではありません。最初に会社の実態、次に事業内容、次に今回の記事の目的を確認してから、回答内容に応じてサービス・顧客・課題・実績を奥へ深掘りします。クライアントの業種、これまでの回答、既存一次情報を読み、回答済みのことを聞き直さず、次の質問を1問だけ作ってください。短い・抽象的な回答には、同じ論点の具体例、対象、判断、期間、条件、本人の言葉のいずれか一つだけを追加で聞いてください。「分からない」「非公開」の回答を繰り返し聞かず、別の一次情報へ進んでください。質問は、専門用語や曖昧な営業表現を避けた自然で丁寧な日本語にし、なぜ今それが必要かと何を答えればよいかが分かる補足を含めてください。「他社と比べて」などの比較質問は、会社・事業・記事目的を確認した後にだけ行います。事例なら対象・期間・施策・前後変化・公開可否、人物記事なら本人の経験・発言確認・肩書き、慎重な業種なら条件・根拠・確認者を優先します。更新回答なら何が変わったかと有効時点を確認してください。follow_up_questionsは不足がある限り最も重要な1問だけを返してください。next_question_keyは company/business/content_goal/service/customer/problem/difference/process/proof/evidence/update または followup_ を先頭につけた同じキーにします。quality_breakdownは項目ごとの配列にし、80点未満では不足項目を埋める質問を優先し、80点以上でも公開可否が未確認ならready_for_useをfalseにしてください。アプリが今回の質問論点をすでに決定しています: ${compact(interviewDecision, 6000)}。follow_up_questionsはこのnext_question_keyと同じ論点だけを尋ねてください。followup_で始まる場合は、直前の回答から一つの具体的事実だけを深掘りし、会社紹介など別の最初の質問へ戻さないでください。next_question_keyがnullなら質問を返さず、正式文と不足・公開可否の整理だけを返してください。ジョブ情報:${compact({ payload: job.payload, context }, 24000)}`,
       3000,
       false,
       job.context?.anthropicApiKey,
@@ -1263,7 +1272,9 @@ async function primaryInfoAssistant(env: Env, job: Job, instruction: string, con
       next_question_key: guided.next_question_key,
       // Claude sees the actual client transcript and supplies the tailored
       // wording. The application-owned fallback remains available if it fails.
-      follow_up_questions: modelQuestion ? [modelQuestion.slice(0, 600)] : guided.follow_up_questions,
+      follow_up_questions: guided.next_question_key && modelQuestion
+        ? [modelQuestion.slice(0, 600)]
+        : guided.follow_up_questions,
       ready_for_use: false,
       processed_file_ids: documents.processedFileIds,
     };

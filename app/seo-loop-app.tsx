@@ -6800,11 +6800,18 @@ function Sources({
   const completedKeys = Array.isArray(result?.interview_progress?.completed)
     ? result.interview_progress.completed.map((key: unknown) => String(key))
     : [];
+  const baseInterviewKey = (key: unknown) =>
+    String(key || "").replace(/^followup_/, "");
+  // Always honour the Worker decision first.  A follow-up such as
+  // `followup_proof` means the previous answer needs one concrete detail;
+  // choosing the first unfinished field here used to send the conversation
+  // back to the generic company question instead.
+  const requestedInterviewStep =
+    interviewSteps.find((step) => step.key === baseInterviewKey(result?.next_question_key)) ||
+    interviewSteps.find((step) => step.key === baseInterviewKey(questionStepKey));
   const activeInterviewStep =
+    requestedInterviewStep ||
     interviewSteps.find((step) => !completedKeys.includes(step.key)) ||
-    interviewSteps.find(
-      (step) => step.key === result?.next_question_key || step.key === questionStepKey,
-    ) ||
     interviewSteps[0];
   const activeQuestionKey =
     (typeof result?.next_question_key === "string" && result.next_question_key) ||
@@ -6812,8 +6819,8 @@ function Sources({
     activeInterviewStep.key;
   const latestMessage = String(latest?.payload?.answers?.message || "");
   const modelQuestionMatchesActiveStep =
-    result?.next_question_key === activeInterviewStep.key ||
-    questionStepKey === activeInterviewStep.key;
+    baseInterviewKey(result?.next_question_key) === activeInterviewStep.key ||
+    baseInterviewKey(questionStepKey) === activeInterviewStep.key;
   const nextQuestion =
     (modelQuestionMatchesActiveStep || activeQuestionKey.startsWith("followup_")) && questions[0]
       ? questions[0]
@@ -6821,8 +6828,14 @@ function Sources({
   const completedInterviewSteps = Array.isArray(result?.interview_progress?.completed)
     ? result.interview_progress.completed.length
     : 0;
+  // A completion action is shown only when the Worker has no further
+  // evidence question.  Thin answers keep the same topic open until the
+  // client has added a usable example, condition, period, or source.
   const interviewComplete =
-    completedInterviewSteps >= interviewSteps.length && !primarySufficient;
+    completedInterviewSteps >= interviewSteps.length &&
+    !result?.next_question_key &&
+    !questionStepKey &&
+    !primarySufficient;
   const articleReadiness = result?.article_readiness;
   return (
     <>
