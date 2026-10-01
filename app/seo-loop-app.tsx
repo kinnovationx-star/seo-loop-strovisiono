@@ -6794,9 +6794,9 @@ function Sources({
   const questionStepKey = questionItems.find(
     (item: any) => item && typeof item === "object" && typeof item.next_question_key === "string",
   )?.next_question_key;
-  // Always continue with the earliest missing foundation.  A previous Worker
-  // result can contain an older question order; it must not skip company,
-  // business, or article purpose after this interview flow changes.
+  // The Worker owns the interview state.  It can request a follow-up on the
+  // current topic when an answer is too abstract, rather than mechanically
+  // advancing to the next item.
   const completedKeys = Array.isArray(result?.interview_progress?.completed)
     ? result.interview_progress.completed.map((key: unknown) => String(key))
     : [];
@@ -6806,12 +6806,16 @@ function Sources({
       (step) => step.key === result?.next_question_key || step.key === questionStepKey,
     ) ||
     interviewSteps[0];
+  const activeQuestionKey =
+    (typeof result?.next_question_key === "string" && result.next_question_key) ||
+    questionStepKey ||
+    activeInterviewStep.key;
   const latestMessage = String(latest?.payload?.answers?.message || "");
   const modelQuestionMatchesActiveStep =
     result?.next_question_key === activeInterviewStep.key ||
     questionStepKey === activeInterviewStep.key;
   const nextQuestion =
-    modelQuestionMatchesActiveStep && questions[0]
+    (modelQuestionMatchesActiveStep || activeQuestionKey.startsWith("followup_")) && questions[0]
       ? questions[0]
       : activeInterviewStep.question;
   const completedInterviewSteps = Array.isArray(result?.interview_progress?.completed)
@@ -6819,6 +6823,7 @@ function Sources({
     : 0;
   const interviewComplete =
     completedInterviewSteps >= interviewSteps.length && !primarySufficient;
+  const articleReadiness = result?.article_readiness;
   return (
     <>
       <div className="heading">
@@ -6841,15 +6846,15 @@ function Sources({
       )}
       <section className="panel primary-chat simple-interview">
         <div className="interview-progress" aria-label="質問の進み具合">
-          {primarySufficient ? "記事に使う情報を更新できます" : `確認できた項目 ${completedInterviewSteps} / ${interviewSteps.length}`}
+          {primarySufficient ? "記事に使う情報を更新できます" : articleReadiness ? `記事の土台 ${articleReadiness.completed} / ${articleReadiness.total}` : "記事の土台 0 / 6"}
         </div>
         {primarySufficient && <p className="field-help">内容が変わったら、変更内容と「いつから変わったか」だけを送ってください。以前の情報は履歴として残し、最新の内容へ更新します。</p>}
         {latestMessage && <p className="answer-received">✓ 前の回答を受け取りました</p>}
-        <div className="assistant-bubble simple-question"><b>AIからの質問</b><p>{primarySufficient ? (questions[0] || "新しい実績・サービス変更・お客様の声など、記事へ追加したいことを自由に教えてください。いつからの情報かも分かれば一緒に書いてください。") : nextQuestion}</p></div>
+        <div className="assistant-bubble simple-question"><b>AIからの質問</b><p>{primarySufficient ? (questions[0] || "新しい実績・サービス変更・お客様の声など、記事へ追加したいことを自由に教えてください。いつからの情報かも分かれば一緒に書いてください。") : nextQuestion}</p>{!primarySufficient && <small>回答が短い場合は、記事に使える具体例を一つだけ追加で伺います。分からない・非公開の場合は、そのまま送ってください。</small>}</div>
         <form onSubmit={assist} className="chat-form simple-chat-form">
           <textarea aria-label="あなたの回答" name="message" required placeholder={primarySufficient ? "例：2026年10月から新サービスを開始。対象は…／新しい事例は…" : "文章でも箇条書きでも大丈夫です。数字・期間・実例・本人の言葉があれば、そのまま書いてください。"} />
           <input type="hidden" name="askedQuestion" value={primarySufficient ? (questions[0] || "更新したい一次情報を教えてください。") : nextQuestion} />
-          <input type="hidden" name="questionKey" value={primarySufficient ? "update" : activeInterviewStep.key} />
+          <input type="hidden" name="questionKey" value={primarySufficient ? "update" : activeQuestionKey} />
           <button className="primary" disabled={busy || !codexReady}>{busy ? "整理しています…" : primarySufficient ? "変更を反映する" : "送る"}</button>
           <small>分からないことは「分からない」と送って大丈夫です。確認できない数値や実績をAIが補うことはありません。</small>
         </form>

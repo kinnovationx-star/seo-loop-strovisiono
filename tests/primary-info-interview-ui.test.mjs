@@ -24,7 +24,10 @@ test("primary-information UI safely renders legacy structured follow-up question
 test("guided primary interview scores coverage without inventing a claim", async () => {
   const worker = await readFile(path.join(root, "cloud-runner", "src", "index.ts"), "utf8");
   assert.match(worker, /quality_score: score/);
-  assert.match(worker, /50 \+ completed\.length \* 5/);
+  assert.match(worker, /const PRIMARY_ARTICLE_CHECKS/);
+  assert.match(worker, /const primaryAnswerDepth/);
+  assert.match(worker, /const primaryClarifyingQuestion/);
+  assert.match(worker, /記事の土台は\$\{PRIMARY_ARTICLE_CHECKS\.length\}項目中/);
   assert.match(worker, /未確認の数値・実績・表現は、確認が終わるまで記事で断定しません/);
   assert.match(worker, /ready_for_use: false/);
 });
@@ -70,9 +73,12 @@ test("primary-information interview establishes the company and article goal bef
     assert.ok(company >= 0 && company < business && business < goal && goal < difference);
   }
   assert.match(worker, /最初に会社の実態、次に事業内容、次に今回の記事の目的を確認/);
+  assert.match(worker, /「分からない」「非公開」の回答を繰り返し聞かず/);
+  assert.match(worker, /短い・抽象的な回答には、同じ論点の具体例/);
   assert.match(worker, /専門用語や曖昧な営業表現を避けた自然で丁寧な日本語/);
   assert.match(ui, /const modelQuestionMatchesActiveStep/);
-  assert.match(ui, /earliest missing foundation/);
+  assert.match(ui, /const activeQuestionKey/);
+  assert.match(ui, /記事の土台/);
 });
 
 test("confirmed primary information accepts incremental chat updates without losing the prior master", async () => {

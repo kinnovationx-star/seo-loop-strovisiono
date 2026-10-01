@@ -1052,6 +1052,52 @@ const PRIMARY_INTERVIEW_STEPS = [
   { key: "proof", label: "公開できる実績", question: "記事で公開してよい事例・成果・お客様の声はありますか？ 数字は期間や条件も一緒に教えてください。" },
   { key: "evidence", label: "根拠・公開可否", question: "上の内容を裏付けるURL・資料・確認担当者と、記事で公開してよい範囲を教えてください。" },
 ] as const;
+type PrimaryInterviewStep = (typeof PRIMARY_INTERVIEW_STEPS)[number];
+
+// The interview is intentionally a conversation rather than a questionnaire.
+// These six checks describe the minimum evidence an editor needs before a
+// useful article can be drafted.  They are deliberately broader than the
+// individual prompts, so a strong answer can satisfy more than one check.
+const PRIMARY_ARTICLE_CHECKS = [
+  { key: "foundation", label: "会社・事業の前提", steps: ["company", "business"] },
+  { key: "purpose", label: "記事の目的と読者", steps: ["content_goal", "customer"] },
+  { key: "reader_problem", label: "読者の課題", steps: ["problem"] },
+  { key: "offer_and_method", label: "提供内容と進め方", steps: ["service", "process"] },
+  { key: "distinctive_view", label: "独自の考え方・判断", steps: ["difference"] },
+  { key: "article_evidence", label: "具体例・公開可否", steps: ["proof", "evidence"] },
+] as const;
+
+const primaryStepByKey = (key: string): PrimaryInterviewStep | undefined =>
+  PRIMARY_INTERVIEW_STEPS.find((step) => step.key === key.replace(/^followup_/, ""));
+const primaryStepKey = (key: string) => primaryStepByKey(key)?.key || "";
+const isUnknownPrimaryAnswer = (value: string) =>
+  /^(?:わからない|分からない|不明|なし|ない|未定|非公開|答えられない|把握していない)[。！!、,\s]*$/i.test(value.trim());
+const primaryAnswerDepth = (value: string) => {
+  const answer = value.trim();
+  if (!answer) return "missing" as const;
+  if (isUnknownPrimaryAnswer(answer)) return "unavailable" as const;
+  // A short answer can still be meaningful, but it is not enough to turn
+  // into a credible article paragraph without one more concrete detail.
+  if (answer.length < 45) return "thin" as const;
+  return "usable" as const;
+};
+const primaryClarifyingQuestion = (step: PrimaryInterviewStep, answer: string) => {
+  const quoted = answer.trim().replace(/\s+/g, " ").slice(0, 80);
+  const lead = quoted ? `「${quoted}」とのこと、` : "記事で正確に伝えるため、";
+  const prompts: Record<string, string> = {
+    company: "創業の背景・現在の拠点や対応範囲・体制のうち、公開できる事実を一つだけ追加で教えてください。",
+    business: "実際にどのような相談を受け、何をどこまで提供しているか、代表的な仕事を一例で教えてください。",
+    content_goal: "この記事を読んでほしい相手と、読み終えた後に知ってほしいこと／取ってほしい行動を教えてください。",
+    service: "代表的な依頼を一つ選び、依頼内容・提供物・条件（公開できる範囲）を教えてください。",
+    customer: "最近相談が多いお客様を一例に、立場・状況・相談のきっかけを教えてください。",
+    problem: "お客様が相談時に実際に口にする困りごとや、放置すると何が困るかを一つ教えてください。",
+    difference: "その考え方や進め方が表れた具体的な判断・工夫を一つ教えてください。比較優位を無理に断定する必要はありません。",
+    process: "一件の依頼を例に、最初の相談から納品・確認までの流れと、特に気を付ける点を教えてください。",
+    proof: "公開できる事例を一つだけ、対象・課題・行ったこと・変化（数値があれば期間と条件）に分けて教えてください。数値がなければ事実だけで大丈夫です。",
+    evidence: "ここまでの内容のうち、記事に載せてよい固有名詞・数字・お客様の声と、確認を取る担当者または資料の有無を教えてください。",
+  };
+  return `${lead}${prompts[step.key]}`;
+};
 function primaryInterviewAnswers(job: Job, context: any) {
   const previous = (context.confirmed_primary || []).map((item: any) => String(item.note || "")).join("\n");
   const current = job.payload?.answers && typeof job.payload.answers === "object" ? job.payload.answers : {};
@@ -1066,12 +1112,13 @@ function primaryInterviewAnswers(job: Job, context: any) {
   for (const answer of Array.isArray(context.primaryInterviewHistory) ? context.primaryInterviewHistory : []) {
     const key = String(answer?.questionKey || "");
     const message = String(answer?.message || "").trim();
-    if (PRIMARY_INTERVIEW_STEPS.some((step) => step.key === key) && message)
-      values[key] = message.slice(0, 2500);
+    const stepKey = primaryStepKey(key);
+    if (stepKey && message) values[stepKey] = [values[stepKey], message.slice(0, 2500)].filter(Boolean).join("\n\n").slice(-5000);
   }
   const askedKey = String(current.questionKey || "");
   const message = String(current.message || "").trim();
-  if (PRIMARY_INTERVIEW_STEPS.some((step) => step.key === askedKey) && message) values[askedKey] = message.slice(0, 2500);
+  const stepKey = primaryStepKey(askedKey);
+  if (stepKey && message) values[stepKey] = [values[stepKey], message.slice(0, 2500)].filter(Boolean).join("\n\n").slice(-5000);
   return values;
 }
 function primaryInfoUpdates(job: Job, context: any) {
@@ -1103,9 +1150,30 @@ function primaryInfoFallback(job: Job) {
       provider_status: "PDF_PRIMARY_INFORMATION_IMPORT",
     };
   }
-  const completed = PRIMARY_INTERVIEW_STEPS.filter((step) => Boolean(answers[step.key]));
-  const next = PRIMARY_INTERVIEW_STEPS.find((step) => !answers[step.key]);
-  const score = Math.min(85, 50 + completed.length * 5);
+  const statuses = Object.fromEntries(PRIMARY_INTERVIEW_STEPS.map((step) => [step.key, primaryAnswerDepth(answers[step.key] || "")]));
+  const completed = PRIMARY_INTERVIEW_STEPS.filter((step) => statuses[step.key] !== "missing");
+  const usable = PRIMARY_INTERVIEW_STEPS.filter((step) => statuses[step.key] === "usable");
+  const readiness = PRIMARY_ARTICLE_CHECKS.map((check) => {
+    const values = check.steps.map((key) => statuses[key]);
+    return {
+      key: check.key,
+      label: check.label,
+      // "unavailable" is recorded as an honest limitation, not silently
+      // treated as proof.  It lets the conversation move on instead of
+      // trapping a client in the same question.
+      status: values.every((value) => value === "usable") ? "ready" : values.some((value) => value === "usable") ? "partial" : values.some((value) => value === "unavailable") ? "limited" : "missing",
+    };
+  });
+  const readyChecks = readiness.filter((check) => check.status === "ready").length;
+  const lastHistory = Array.isArray(context.primaryInterviewHistory) ? context.primaryInterviewHistory.at(-1) : null;
+  const lastKey = primaryStepKey(String(job.payload?.answers?.questionKey || lastHistory?.questionKey || ""));
+  const lastStep = primaryStepByKey(lastKey);
+  // Deepen the answer just received when it is too thin to support an article.
+  // A clearly unavailable answer is never asked again; another evidence area
+  // is selected instead.
+  const followUp = lastStep && statuses[lastStep.key] === "thin" ? lastStep : undefined;
+  const next = followUp || PRIMARY_INTERVIEW_STEPS.find((step) => statuses[step.key] === "missing") || PRIMARY_INTERVIEW_STEPS.find((step) => statuses[step.key] === "thin");
+  const score = Math.min(85, 20 + readyChecks * 10 + usable.length * 3 + completed.length * 2);
   const record = PRIMARY_INTERVIEW_STEPS.filter((step) => answers[step.key])
     .map((step) => `【${step.label}】\n${answers[step.key]}`)
     .join("\n\n");
@@ -1118,13 +1186,14 @@ function primaryInfoFallback(job: Job) {
     : "一次情報の回答がまだありません。";
   return {
     quality_score: score,
-    quality_summary: `必要な一次情報は${PRIMARY_INTERVIEW_STEPS.length}項目中${completed.length}項目です。次の質問に答えると、記事で使える正式文章へ近づきます。`,
-    quality_breakdown: PRIMARY_INTERVIEW_STEPS.map((step) => ({ label: step.label, score: answers[step.key] ? 10 : 0 })),
+    quality_summary: `記事の土台は${PRIMARY_ARTICLE_CHECKS.length}項目中${readyChecks}項目です。${next ? "次は、記事の根拠になる具体例を1つ確認します。" : "回答内容を確認し、公開可否を確定すると記事用の文章へまとめられます。"}`,
+    quality_breakdown: PRIMARY_INTERVIEW_STEPS.map((step) => ({ label: step.label, score: statuses[step.key] === "usable" ? 10 : statuses[step.key] === "unavailable" ? 3 : statuses[step.key] === "thin" ? 5 : 0 })),
     client_facing_summary: summary,
     article_ready_text: summary,
     interview_progress: { completed: completed.map((step) => step.key), total: PRIMARY_INTERVIEW_STEPS.length },
-    next_question_key: next?.key || null,
-    follow_up_questions: next ? [next.question] : ["公開してよい表現・数値・実績を確認したうえで、最下部の確定操作へ進んでください。"],
+    article_readiness: { completed: readyChecks, total: PRIMARY_ARTICLE_CHECKS.length, checks: readiness },
+    next_question_key: followUp ? `followup_${followUp.key}` : next?.key || null,
+    follow_up_questions: next ? [followUp ? primaryClarifyingQuestion(followUp, answers[followUp.key] || "") : next.question] : ["ここまでの内容で、記事に載せてよい固有名詞・数字・事例を確認してください。追加できる事実があれば、そのまま送ってください。"],
     unverified_claims: [],
     ready_for_use: false,
     provider_status: "FALLBACK_GUIDED_INTERVIEW",
@@ -1172,7 +1241,7 @@ async function primaryInfoAssistant(env: Env, job: Job, instruction: string, con
     const documents = await primaryPdfAttachments(env, job);
     const out = await claude(
       env,
-      `${instruction} 添付PDFがある場合は、PDFに書かれた「項目」と「クライアントの内容」を最優先の根拠として使います。PDFの記載を単に転載せず、内容を落とさず自然な日本語の一次情報へ文章化してください。PDFにない数値・実績・お客様の声は創作せず、未確認はunverified_claimsへ分けてください。これは固定アンケートではありません。最初に会社の実態、次に事業内容、次に今回の記事の目的を確認してから、回答内容に応じてサービス・顧客・課題・実績を奥へ深掘りします。クライアントの業種、これまでの回答、既存一次情報を読み、回答済みのことを聞き直さず、次の質問を1問だけ作ってください。質問は、専門用語や曖昧な営業表現を避けた自然で丁寧な日本語にし、何を答えればよいかが分かる補足を含めてください。「他社と比べて」などの比較質問は、会社・事業・記事目的を確認した後にだけ行います。事例なら対象・期間・施策・前後変化・公開可否、人物記事なら本人の経験・発言確認・肩書き、慎重な業種なら条件・根拠・確認者を優先します。更新回答なら何が変わったかと有効時点を確認してください。quality_breakdownは項目ごとの配列、next_question_keyは company/business/content_goal/service/customer/problem/difference/process/proof/evidence/update のいずれか、follow_up_questionsは不足がある限り最も重要な1問だけを返してください。80点未満では不足項目を埋める質問を優先し、80点以上でも公開可否が未確認ならready_for_useをfalseにしてください。ジョブ情報:${compact({ payload: job.payload, context }, 24000)}`,
+      `${instruction} 添付PDFがある場合は、PDFに書かれた「項目」と「クライアントの内容」を最優先の根拠として使います。PDFの記載を単に転載せず、内容を落とさず自然な日本語の一次情報へ文章化してください。PDFにない数値・実績・お客様の声は創作せず、未確認はunverified_claimsへ分けてください。これは固定アンケートではありません。最初に会社の実態、次に事業内容、次に今回の記事の目的を確認してから、回答内容に応じてサービス・顧客・課題・実績を奥へ深掘りします。クライアントの業種、これまでの回答、既存一次情報を読み、回答済みのことを聞き直さず、次の質問を1問だけ作ってください。短い・抽象的な回答には、同じ論点の具体例、対象、判断、期間、条件、本人の言葉のいずれか一つだけを追加で聞いてください。「分からない」「非公開」の回答を繰り返し聞かず、別の一次情報へ進んでください。質問は、専門用語や曖昧な営業表現を避けた自然で丁寧な日本語にし、なぜ今それが必要かと何を答えればよいかが分かる補足を含めてください。「他社と比べて」などの比較質問は、会社・事業・記事目的を確認した後にだけ行います。事例なら対象・期間・施策・前後変化・公開可否、人物記事なら本人の経験・発言確認・肩書き、慎重な業種なら条件・根拠・確認者を優先します。更新回答なら何が変わったかと有効時点を確認してください。follow_up_questionsは不足がある限り最も重要な1問だけを返してください。next_question_keyは company/business/content_goal/service/customer/problem/difference/process/proof/evidence/update または followup_ を先頭につけた同じキーにします。quality_breakdownは項目ごとの配列にし、80点未満では不足項目を埋める質問を優先し、80点以上でも公開可否が未確認ならready_for_useをfalseにしてください。ジョブ情報:${compact({ payload: job.payload, context }, 24000)}`,
       3000,
       false,
       job.context?.anthropicApiKey,
