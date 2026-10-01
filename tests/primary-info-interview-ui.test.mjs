@@ -12,6 +12,16 @@ test("primary-information UI keeps a focused one-question chat and retains the a
   assert.doesNotMatch(ui, /入力内容を記事作成に使う許可を確認済み/);
 });
 
+test("monthly content plan has a dedicated shareable lower-page route", async () => {
+  const [ui, page] = await Promise.all([
+    readFile(path.join(root, "app", "seo-loop-app.tsx"), "utf8"),
+    readFile(path.join(root, "app", "monthly-content-plan", "page.tsx"), "utf8"),
+  ]);
+  assert.match(ui, /location\.assign\("\/monthly-content-plan"\)/);
+  assert.match(ui, /function SeoLoopApp\(\{ initialPage = "dashboard" \}/);
+  assert.match(page, /<SeoLoopApp initialPage="monthly-plan" \/>/);
+});
+
 test("primary-information UI safely renders legacy structured follow-up questions", async () => {
   const ui = await readFile(path.join(root, "app", "seo-loop-app.tsx"), "utf8");
   assert.match(ui, /const questionItems = Array\.isArray\(result\?\.follow_up_questions\)/);

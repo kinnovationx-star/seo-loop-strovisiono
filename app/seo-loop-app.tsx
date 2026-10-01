@@ -280,10 +280,10 @@ async function api(path: string, method = "GET", body?: any): Promise<any> {
   if (!response.ok) throw new Error(data.error || "処理できませんでした。");
   return data;
 }
-export function SeoLoopApp() {
+export function SeoLoopApp({ initialPage = "dashboard" }: { initialPage?: string }) {
   const [data, setData] = useState<Data>(blank);
   const [loaded, setLoaded] = useState(false);
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useState(initialPage);
   const [selected, setSelected] = useState("");
   const [notice, setNotice] = useState("");
   const [modal, setModal] = useState("");
@@ -585,6 +585,15 @@ export function SeoLoopApp() {
       return null;
     }
   };
+  const navigate = (nextPage: string) => {
+    // The content plan has its own shareable URL.  Keep every other screen
+    // as the existing fast in-app view.
+    if (nextPage === "monthly-plan" && location.pathname !== "/monthly-content-plan") {
+      location.assign("/monthly-content-plan");
+      return;
+    }
+    setPage(nextPage);
+  };
   return (
     <div className="app">
       <aside className="side">
@@ -598,7 +607,7 @@ export function SeoLoopApp() {
             <button
               key={key}
               className={page === key ? "active" : ""}
-              onClick={() => setPage(key)}
+              onClick={() => navigate(key)}
             >
               {icon} <span>{label}</span>
             </button>
