@@ -6649,6 +6649,9 @@ function Sources({
   const hasPdfImport = sourceFiles.some(
     (file: any) => file.content_type === "application/pdf",
   );
+  const hasExcelImport = sourceFiles.some(
+    (file: any) => file.content_type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" && file.status === "processed",
+  );
   // The global refresh cadence is deliberately slow for dashboard traffic,
   // but a chat answer should visibly advance as soon as its queue job ends.
   useEffect(() => {
@@ -6671,6 +6674,8 @@ function Sources({
   const upload = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
+    const selectedFile = form.get("file");
+    const isExcel = selectedFile instanceof File && /\.xlsx$/i.test(selectedFile.name);
     setFileMessage("アップロード中…");
     try {
       const response = await fetch(`/api/clients/${client.id}/source-files`, {
@@ -6681,6 +6686,11 @@ function Sources({
       if (!response.ok)
         throw new Error(result.error || "アップロードできませんでした。");
       e.currentTarget.reset();
+      if (isExcel) {
+        setFileMessage(`${result.imported?.count || 0}項目をExcelから取り込みました。下の原文を確認して、記事利用を確定してください。`);
+        await refresh();
+        return;
+      }
       await api(`clients/${client.id}/jobs`, "POST", {
         type: "primary_info_assist",
         payload: { mode: "pdf_import", sourceFileId: result.file?.id },
@@ -6689,6 +6699,21 @@ function Sources({
       await refresh();
     } catch (error: any) {
       setFileMessage(error.message);
+    }
+  };
+  const confirmExcelImport = async () => {
+    setConfirmingPrimary(true);
+    setPrimaryMessage("");
+    try {
+      await api(`clients/${client.id}/primary-info-status`, "POST", {
+        confirmFacts: "yes",
+        confirmRights: "yes",
+      });
+      await refresh("Excelの原文を記事用の一次情報として確定しました。");
+    } catch (error: any) {
+      setPrimaryMessage(error.message);
+    } finally {
+      setConfirmingPrimary(false);
     }
   };
   const assist = async (e: FormEvent<HTMLFormElement>) => {
@@ -6885,19 +6910,20 @@ function Sources({
         {!primarySufficient && interviewComplete && <form onSubmit={consolidateArticleInfo} className="simple-finish-form"><button className="primary" disabled={confirmingPrimary || busy || !canonicalSource}>{confirmingPrimary || busy ? "まとめています…" : "記事用にまとめる"}</button>{primaryMessage && <p className="error-text">{primaryMessage}</p>}</form>}
       </section>
       <details className="interview-details">
-        <summary>Excel / PDFを使ってまとめて追加する（任意）</summary>
+        <summary>Excel / PDFから一次情報をまとめて追加する（任意）</summary>
         <section className="panel primary-template-flow">
         <div className="template-steps">
           <p><b>1.</b> Excelテンプレートを開く</p>
           <p><b>2.</b> B列に回答を書く</p>
-          <p><b>3.</b> PDFにして追加する</p>
+          <p><b>3.</b> .xlsxのまま追加し、読み取った原文を確認する</p>
         </div>
         <a className="primary template-download" href="/primary-information-template.xlsx" download>Excelテンプレートをダウンロード</a>
-        {fileUploadsEnabled ? <form onSubmit={upload} className="pdf-upload-form"><label>作成したPDFを追加<input name="file" type="file" accept="application/pdf,.pdf" required /></label><button className="primary" disabled={busy}>{busy ? "文章にしています…" : "PDFを追加して文章にする"}</button></form> : <p className="error-text">PDFの追加準備中です。しばらくしてからもう一度開いてください。</p>}
+        {fileUploadsEnabled ? <form onSubmit={upload} className="pdf-upload-form"><label>回答を記入したExcel（.xlsx）またはPDFを追加<input name="file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.pdf,application/pdf" required /></label><button className="primary" disabled={busy}>{busy ? "処理しています…" : "ファイルを追加する"}</button><small>Excelはセルの回答を原文のまま保存します。PDFはAIで文章化します。</small></form> : <p className="error-text">ファイル追加の準備中です。しばらくしてからもう一度開いてください。</p>}
         {fileMessage && <p className="field-help">{fileMessage}</p>}
         {busy && latest?.payload?.mode === "pdf_import" && <p className="answer-received">PDFを読み取り、記事に使える文章へ整理しています。</p>}
         </section>
       </details>
+      {hasExcelImport && canonicalSource && <section className="panel primary-import-result"><div><h3>Excelから取り込んだ一次情報</h3><p>シート名・セル位置・項目名・回答原文を保存しています。内容と公開可否を確認し、必要なら編集してください。</p></div><SourceCard source={canonicalSource} save={saveSource} />{!primarySufficient && <button className="primary" onClick={confirmExcelImport} disabled={confirmingPrimary}>{confirmingPrimary ? "確定しています…" : "内容と記事利用の許可を確認して確定"}</button>}{primaryMessage && <p className="error-text">{primaryMessage}</p>}</section>}
       {hasPdfImport && !busy && canonicalSource && <section className="panel primary-import-result"><div><h3>文章化した一次情報</h3><p>内容はそのまま編集できます。直したら保存してください。</p></div><SourceCard source={canonicalSource} save={saveSource} />{!primarySufficient && <button className="primary" onClick={() => consolidateArticleInfo({ preventDefault: () => undefined } as any)} disabled={confirmingPrimary}> {confirmingPrimary ? "記事用に整えています…" : "この内容で記事用情報にする"}</button>}</section>}
       <details className="interview-details">
         <summary>内容を確認・編集する（必要な場合のみ）</summary>

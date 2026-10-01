@@ -14,6 +14,7 @@ import {
 } from "../../../lib/server";
 import { defaultPriorityWeights, normalizeKeyword, priorityBreakdown, scoreKeyword, topicCoverage } from "../../../lib/seo-intelligence";
 import { evaluateWeeklyAutopilot, freshnessStatus, measureAutopilot } from "../../../lib/seo-autopilot.mjs";
+import { parsePrimaryExcel, primaryExcelText } from "../../../lib/primary-excel";
 
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path?: string[] }> };
@@ -3366,7 +3367,8 @@ export async function POST(request: Request, context: Context) {
         "image/png",
         "image/webp",
       ];
-      if (!allowed.includes(file.type))
+      const isExcel = file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || /\.xlsx$/i.test(file.name);
+      if (!allowed.includes(file.type) && !isExcel)
         return json(
           {
             error:
@@ -3378,16 +3380,33 @@ export async function POST(request: Request, context: Context) {
         return json({ error: "空の資料ファイルはアップロードできません。" }, 422);
       if (file.size > 20 * 1024 * 1024)
         return json({ error: "1ファイル20MB以内にしてください。" }, 422);
+      let excelBytes: Uint8Array | null = null;
+      let excelEntries: ReturnType<typeof parsePrimaryExcel> = [];
+      let excelNote = "";
+      let canonical: any = null;
+      if (isExcel) {
+        try {
+          excelBytes = new Uint8Array(await file.arrayBuffer());
+          excelEntries = parsePrimaryExcel(excelBytes);
+          excelNote = primaryExcelText(file.name.slice(0, 240), excelEntries);
+          canonical = await runtime().DB.prepare("SELECT * FROM sources WHERE client_id=? AND is_canonical=1 AND archived=0 LIMIT 1").bind(clientId).first<any>();
+          if (canonical?.note && `${canonical.note}\n\n${excelNote}`.length > 10000)
+            return json({ error: "保存済みの一次情報とExcelの合計が長すぎます。既存内容を整理してから取り込んでください。" }, 422);
+        } catch (error: any) {
+          return json({ error: String(error?.message || "Excelを読み取れませんでした。") }, 422);
+        }
+      }
       const fileId = id();
       const objectKey = `primary-info/${owner}/${clientId}/${fileId}`;
-      await runtime().FILES!.put(objectKey, file.stream(), {
-        httpMetadata: { contentType: file.type },
+      await runtime().FILES!.put(objectKey, excelBytes || file.stream(), {
+        httpMetadata: { contentType: isExcel ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : file.type },
         customMetadata: { originalName: file.name.slice(0, 240) },
       });
       const stamp = now();
+      let importedSourceId: string | null = null;
       try {
-        await runtime()
-          .DB.prepare(
+        const db = runtime().DB;
+        const fileInsert = db.prepare(
             "INSERT INTO source_files (id,client_id,object_key,name,content_type,size,rights_confirmed,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
           )
           .bind(
@@ -3395,16 +3414,40 @@ export async function POST(request: Request, context: Context) {
             clientId,
             objectKey,
             file.name.slice(0, 240),
-            file.type,
+            isExcel ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : file.type,
             file.size,
             rights ? 1 : 0,
-            "uploaded",
+            isExcel ? "processed" : "uploaded",
             stamp,
-          )
-          .run();
+          );
+        if (isExcel) {
+          const sourceId = canonical?.id || id();
+          importedSourceId = sourceId;
+          const note = [String(canonical?.note || "").trim(), excelNote].filter(Boolean).join("\n\n");
+          const sourceWrite = canonical
+            ? db.prepare("UPDATE sources SET note=?,rights='unconfirmed',approved=0,canonical_status='needs_confirmation',updated_at=? WHERE id=? AND client_id=?")
+                .bind(note, stamp, sourceId, clientId)
+            : db.prepare("INSERT INTO sources (id,client_id,type,title,note,url,rights,approved,is_canonical,archived,canonical_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                .bind(sourceId, clientId, "excel_import", "Excelから取り込んだ一次情報（記事利用マスター）", note, "", "unconfirmed", 0, 1, 0, "needs_confirmation", stamp, stamp);
+          await db.batch([
+            fileInsert,
+            sourceWrite,
+            db.prepare("UPDATE clients SET primary_info_status='missing',updated_at=? WHERE id=?").bind(stamp, clientId),
+          ]);
+        } else {
+          await fileInsert.run();
+        }
       } catch (error) {
         await runtime().FILES!.delete(objectKey).catch(() => undefined);
         throw error;
+      }
+      if (isExcel && importedSourceId) {
+        try {
+          const currentNote = [String(canonical?.note || "").trim(), excelNote].filter(Boolean).join("\n\n");
+          await recordPrimaryInfoVersion(clientId, importedSourceId, currentNote, excelEntries, `Excel ${file.name.slice(0, 100)}から${excelEntries.length}項目を取り込み`);
+        } catch (error) {
+          console.error("Excel primary information version history could not be recorded", error);
+        }
       }
       await log(
         clientId,
@@ -3417,8 +3460,9 @@ export async function POST(request: Request, context: Context) {
             id: fileId,
             name: file.name,
             size: file.size,
-            status: "uploaded",
+            status: isExcel ? "processed" : "uploaded",
           },
+          ...(isExcel ? { imported: { count: excelEntries.length, sourceId: importedSourceId } } : {}),
         },
         201,
       );

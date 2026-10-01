@@ -64,7 +64,7 @@ test("primary-information chat is the default, asks client-specific follow-ups, 
   ]);
   assert.match(ui, /AIとの会話で、記事に使える一次情報をつくる/);
   assert.match(ui, /一次情報の更新履歴/);
-  assert.match(ui, /Excel \/ PDFを使ってまとめて追加する（任意）/);
+  assert.match(ui, /Excel \/ PDFから一次情報をまとめて追加する（任意）/);
   assert.match(worker, /これは固定アンケートではありません/);
   assert.match(worker, /回答済みのことを聞き直さず/);
   assert.match(worker, /follow_up_questions: guided\.next_question_key && modelQuestion/);
