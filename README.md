@@ -1,6 +1,6 @@
-# SEO LOOP — WebConnect / リバイブレイト版
+# SEO LOOP — 株式会社StrovisionO版
 
-WebConnect（`https://webconnect.site/`）とリバイブレイト（`https://reviverate.net/`）を、それぞれ独立して運用するSEO LOOPです。初回ログイン時に2サイトの運用先が自動作成され、画面右上から切り替えられます。検索データ、WordPress認証情報、一次情報、記事、ジョブ、ログはサイト間で共有されません。
+株式会社StrovisionO（`https://strovisiono.com/`）専用のSEO LOOPです。初回ログイン時にStrovisionOの運用先が自動作成され、検索データ、WordPress認証情報、一次情報、記事、ジョブ、ログをこのサイトだけで管理します。
 
 このリポジトリには認証情報、CloudflareのリソースID、サブドメイン設定を含めません。
 

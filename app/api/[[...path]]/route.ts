@@ -19,22 +19,15 @@ export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path?: string[] }> };
 const DEFAULT_SITES = [
   {
-    id: "webconnect-site",
-    name: "WebConnect",
-    site: "https://webconnect.site/",
-    niche: "Webサービス",
-  },
-  {
-    id: "reviverate-net",
-    name: "リバイブレイト",
-    site: "https://reviverate.net/",
-    niche: "動画制作・イベント企画・企業PR",
+    id: "strovisiono-com",
+    name: "株式会社StrovisionO",
+    site: "https://strovisiono.com/",
+    niche: "遊技機アニメーション制作",
   },
 ] as const;
 
-// This deployment is intentionally limited to the two sites requested for
-// this workspace.  They remain separate clients, so integrations, source
-// material, jobs, and publication settings never cross site boundaries.
+// This deployment is intentionally dedicated to StrovisionO. Integrations,
+// source material, jobs, and publication settings stay within this site.
 async function ensureDefaultSites(owner: string) {
   const db = runtime().DB;
   const stamp = now();
@@ -2718,7 +2711,7 @@ export async function POST(request: Request, context: Context) {
     await ensureSchema();
     const parts = (await context.params).path || [];
     const route = parts.join("/");
-    if (route === "clients") return json({ error: "このアプリはWebConnectとリバイブレイト専用です。" }, 403);
+    if (route === "clients") return json({ error: "このアプリは株式会社StrovisionO専用です。" }, 403);
     if (route === "worker/article-schedules") {
       const registered = await worker(request);
       if (!registered) return json({ error: "ワーカー認証が必要です。" }, 401);

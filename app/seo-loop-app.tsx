@@ -794,7 +794,7 @@ function Onboarding() {
   return (
     <section className="panel empty">
       <h2>対象サイトを準備しています</h2>
-      <p>WebConnectとリバイブレイトの運用先を作成しています。数秒後に再読み込みしてください。</p>
+      <p>株式会社StrovisionOの運用先を作成しています。数秒後に再読み込みしてください。</p>
     </section>
   );
 }
